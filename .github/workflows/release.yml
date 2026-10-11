@@ -21,6 +21,14 @@ jobs:
           # The build number counts every commit.
           fetch-depth: 0
 
+      - name: Check CHANGELOG.md has the release's notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          case "$version" in
+            *-*) ;; # A beta shows "## Unreleased", which may be empty.
+            *) grep -qxF "## $version" CHANGELOG.md || { echo "::error::CHANGELOG.md has no ## $version section"; exit 1; } ;;
+          esac
+
       - run: |
           rustup toolchain install stable --profile minimal
           brew install ninja zstd

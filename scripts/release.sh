@@ -5,7 +5,8 @@
 # release workflow. Usage: scripts/release.sh
 #
 # The version is Cargo.toml's; one with a pre-release part, such as
-# 0.2.0-beta.1, is a beta. Settings come from the environment:
+# 0.2.0-beta.1, is a beta. The release notes, on GitHub and in the update
+# window, come from CHANGELOG.md. Settings come from the environment:
 #   TILLER_SIGN_IDENTITY    certificate to sign with (default: "Developer ID Application")
 #   NOTARY_PROFILE          notarytool keychain profile (default: tiller-notary), or
 #   APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID   to notarize without one
@@ -42,6 +43,18 @@ if gh release view "$TAG" >/dev/null 2>&1; then
     exit 1
 fi
 
+# The notes are the version's section of CHANGELOG.md, which a release must
+# have, or for a beta whatever "## Unreleased" holds, which may be nothing.
+NOTES="$(/usr/bin/python3 - "$ROOT/CHANGELOG.md" "${CHANNEL:+Unreleased}" "$VERSION" <<'EOF'
+import re, sys
+path, heading = sys.argv[1], sys.argv[2] or sys.argv[3]
+m = re.search(rf"^## {re.escape(heading)}\n(.*?)(?=^## |\Z)", open(path).read(), re.M | re.S)
+if not m and heading != "Unreleased":
+    sys.exit(f"CHANGELOG.md has no ## {heading} section. Add it and commit it first.")
+print(m.group(1).strip() if m else "")
+EOF
+)"
+
 if [ -n "${APPLE_ID:-}" ]; then
     notary_auth=(--apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID")
 else
@@ -53,6 +66,8 @@ echo "==> Tiller $VERSION (build $BUILD)${CHANNEL:+, $CHANNEL}"
 
 rm -rf "$DIST"
 mkdir -p "$DIST/dmg"
+NOTES_FILE="$DIST/notes.md"
+printf '%s\n' "$NOTES" > "$NOTES_FILE"
 DMG="$DIST/Tiller-$VERSION.dmg"
 ZIP="$DIST/Tiller-$VERSION.zip"
 
@@ -95,8 +110,14 @@ else
 fi
 
 echo "==> publishing $TAG"
+# A beta with nothing under "## Unreleased" lists its pull requests instead.
+if [ -n "$NOTES" ]; then
+    notes_args=(--notes-file "$NOTES_FILE")
+else
+    notes_args=(--generate-notes)
+fi
 gh release create "$TAG" "$DMG" "$ZIP" --target "$(git -C "$ROOT" rev-parse HEAD)" \
-    --title "Tiller $VERSION" --generate-notes ${PRERELEASE[@]+"${PRERELEASE[@]}"}
+    --title "Tiller $VERSION" "${notes_args[@]}" ${PRERELEASE[@]+"${PRERELEASE[@]}"}
 
 # The appcast goes on gh-pages, committed without checking that branch out,
 # and only once the release it points to is there.
@@ -111,7 +132,7 @@ if git -C "$ROOT" rev-parse --verify --quiet origin/gh-pages >/dev/null; then
     tree_entries="$(git -C "$ROOT" ls-tree origin/gh-pages | grep -v $'\tappcast.xml$' || true)"
 fi
 URL="https://github.com/sorrycc/Tiller/releases/download/$TAG/Tiller-$VERSION.zip"
-/usr/bin/python3 "$ROOT/scripts/appcast.py" "$APPCAST" "$VERSION" "$BUILD" "$URL" "$signature" $CHANNEL
+/usr/bin/python3 "$ROOT/scripts/appcast.py" "$APPCAST" "$VERSION" "$BUILD" "$URL" "$signature" "$NOTES_FILE" $CHANNEL
 blob="$(git -C "$ROOT" hash-object -w "$APPCAST")"
 tree="$(printf '%s\n100644 blob %s\tappcast.xml\n' "$tree_entries" "$blob" | sed '/^$/d' | git -C "$ROOT" mktree)"
 commit="$(git -C "$ROOT" commit-tree "$tree" ${parent[@]+"${parent[@]}"} -m "Add Tiller $VERSION to the appcast")"
