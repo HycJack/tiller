@@ -47,7 +47,8 @@ echo "==> CEF framework $FRAMEWORK_VERSION from $CEF_FRAMEWORK_DIR"
 cargo_flags=()
 [ "$CONFIG" = "release" ] && cargo_flags+=(--release)
 echo "==> cargo build ($CONFIG)"
-cargo build --manifest-path "$ROOT/Cargo.toml" --workspace "${cargo_flags[@]}"
+# Bash 3.2 treats empty arrays as unset under set -u.
+cargo build --manifest-path "$ROOT/Cargo.toml" --workspace ${cargo_flags[@]+"${cargo_flags[@]}"}
 RUST_OUT="$ROOT/target/$CONFIG"
 
 echo "==> swift build ($CONFIG)"
