@@ -72,6 +72,7 @@ final class TranscriptView: NSView {
         for view in stack.arrangedSubviews { view.removeFromSuperview() }
         openGroup = nil
         thinking = nil
+        staleRows.removeAll()
     }
 
     /// Puts a "Thinking…" row after the last row, until something else
@@ -98,14 +99,74 @@ final class TranscriptView: NSView {
     }
 
     /// Only a width change re-measures every row; new rows are measured as
-    /// they are added.
+    /// they are added. While the window or panel is being resized, only the
+    /// rows within a screen of the visible ones are, every frame; the rest
+    /// wait for the drag to end, or to be scrolled near.
     override func layout() {
         let width = bounds.width - 2 * Self.inset
         if width != lastWidth, width > 0 {
             lastWidth = width
-            for row in stack.arrangedSubviews { Self.fit(row, width: width) }
+            if inLiveResize {
+                staleRows = Set(stack.arrangedSubviews.map(ObjectIdentifier.init))
+            } else {
+                staleRows.removeAll()
+                for row in stack.arrangedSubviews { Self.fit(row, width: width) }
+            }
+        }
+        if !staleRows.isEmpty {
+            let visible = visibleRect
+            fitStaleRows(near: inLiveResize ? visible.insetBy(dx: 0, dy: -visible.height) : nil)
         }
         super.layout()
+    }
+
+    /// Rows not yet measured for the current width.
+    private var staleRows = Set<ObjectIdentifier>()
+
+    /// The stale rows within `rect`, or all of them.
+    private func fitStaleRows(near rect: NSRect?) {
+        for row in stack.arrangedSubviews where staleRows.contains(ObjectIdentifier(row)) {
+            if let rect, !convert(row.bounds, from: row).intersects(rect) { continue }
+            staleRows.remove(ObjectIdentifier(row))
+            Self.fit(row, width: lastWidth)
+        }
+    }
+
+    /// A scroll during a resize brings stale rows near, which are measured
+    /// on the next layout.
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: nil)
+        guard let clip = superview as? NSClipView else { return }
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(clipScrolled(_:)), name: NSView.boundsDidChangeNotification, object: clip)
+    }
+
+    @objc private func clipScrolled(_ notification: Notification) {
+        if inLiveResize, !staleRows.isEmpty { needsLayout = true }
+    }
+
+    /// The rest of the rows are measured once the drag ends. A transcript
+    /// scrolled to the end stays there, though the rows above grew or shrank.
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        guard !staleRows.isEmpty else { return }
+        let scrollView = enclosingScrollView
+        let follow = scrollView.map(isNearBottom(of:)) ?? false
+        fitStaleRows(near: nil)
+        guard follow, let scrollView else { return }
+        scrollView.layoutSubtreeIfNeeded()
+        // The clip spans the insets, so the top rests at minus the top inset.
+        let clip = scrollView.contentView, insets = scrollView.contentInsets
+        let y = max(-insets.top, frame.height - clip.bounds.height + insets.bottom)
+        clip.scroll(to: NSPoint(x: 0, y: y))
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    /// A chat hidden through a resize measures its rows when shown.
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        if !staleRows.isEmpty { needsLayout = true }
     }
 
     private static func fit(_ row: NSView, width: CGFloat) {
@@ -312,7 +373,7 @@ private final class ThumbnailView: NSView {
         layer.masksToBounds = true
         layer.cornerRadius = Theme.Radius.row
         layer.cornerCurve = .continuous
-        layer.borderWidth = 1
+        layer.borderWidth = Theme.hairlineWidth
         layer.borderColor = Theme.hairline.layerColor
     }
 
@@ -398,8 +459,9 @@ final class ToolRowView: NSView, TranscriptRow {
     private let chevron: NSImageView?
     private var heading: NSAttributedString
 
-    /// `detail` is what `detail(_:)` made of the call's input.
-    init(name: String, detail: String, disclosure: Bool = false) {
+    /// `detail` is what `detail(_:)` made of the call's input. A `finished`
+    /// row, as a saved chat's are, starts with its outcome and never spins.
+    init(name: String, detail: String, disclosure: Bool = false, finished: (isError: Bool?, summary: String)? = nil) {
         tool = Self.tool(name)
         heading = Self.heading(tool: tool, detail: detail)
         chevron = disclosure ? NSImageView(image: Self.chevronImage(expanded: false)!) : nil
@@ -409,7 +471,6 @@ final class ToolRowView: NSView, TranscriptRow {
         spinner.style = .spinning
         spinner.controlSize = .mini
         spinner.isDisplayedWhenStopped = false
-        spinner.startAnimation(nil)
         icon.isHidden = true
         label.attributedStringValue = heading
         label.maximumNumberOfLines = disclosure ? 1 : 4
@@ -449,6 +510,11 @@ final class ToolRowView: NSView, TranscriptRow {
             setAccessibilityRole(.disclosureTriangle)
         } else {
             label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9).isActive = true
+        }
+        if let finished {
+            finish(isError: finished.isError, summary: finished.summary)
+        } else {
+            spinner.startAnimation(nil)
         }
     }
 
@@ -578,7 +644,7 @@ final class ToolRowView: NSView, TranscriptRow {
             : isPressed ? Theme.Fill.pressed : isHovered ? Theme.Fill.hover : Theme.Fill.rest
         withEasing { layer?.backgroundColor = Theme.fill(alpha).layerColor }
         // A fill this faint goes with Increase Contrast; an edge stays.
-        layer?.borderWidth = Theme.increaseContrast ? 1 : 0
+        layer?.borderWidth = Theme.increaseContrast ? Theme.hairlineWidth : 0
         layer?.borderColor = Theme.hairline.layerColor
     }
 
@@ -1051,6 +1117,8 @@ final class NoteView: NSView {
 final class ErrorMessageView: NSView, TranscriptRow {
     private let label: NSTextField
     private let action: (() -> Void)?
+    /// Room on either side of the button's title.
+    private static let buttonPadding: CGFloat = 8
 
     /// `action` adds a button under the text, such as Try Again.
     init(text: String, action: (title: String, run: () -> Void)? = nil) {
@@ -1079,16 +1147,27 @@ final class ErrorMessageView: NSView, TranscriptRow {
             label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8).isActive = true
             return
         }
-        let button = NSButton(title: action.title, target: self, action: #selector(run(_:)))
-        button.bezelStyle = .rounded
-        button.controlSize = .small
-        button.font = .systemFont(ofSize: 11, weight: .medium)
+        // A plate at rest, so it reads as a button among the panel's
+        // borderless ones without a stock bezel.
+        let button = HoverButton()
+        button.restFill = Theme.Fill.rest
+        button.title = action.title
+        button.isBordered = false
+        button.bezelStyle = .accessoryBarAction
+        button.font = .systemFont(ofSize: Theme.FontSize.caption, weight: .medium)
+        button.contentTintColor = .labelColor
+        let titleWidth = (action.title as NSString).size(withAttributes: [.font: button.font as Any]).width
+        button.target = self
+        button.action = #selector(run(_:))
         button.translatesAutoresizingMaskIntoConstraints = false
         addSubview(button)
         NSLayoutConstraint.activate([
             button.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 6),
-            button.leadingAnchor.constraint(equalTo: label.leadingAnchor),
+            // The title lines up with the text above.
+            button.leadingAnchor.constraint(equalTo: label.leadingAnchor, constant: 2 - Self.buttonPadding),
             button.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            button.widthAnchor.constraint(equalToConstant: ceil(titleWidth) + 2 * Self.buttonPadding),
+            button.heightAnchor.constraint(equalToConstant: Theme.ButtonSize.inline),
         ])
     }
 
@@ -1106,7 +1185,7 @@ final class ErrorMessageView: NSView, TranscriptRow {
         layer?.cornerRadius = Theme.Radius.card
         layer?.cornerCurve = .continuous
         layer?.backgroundColor = NSColor.systemRed.dynamic(alpha: 0.1).layerColor
-        layer?.borderWidth = 1
+        layer?.borderWidth = Theme.hairlineWidth
         layer?.borderColor = NSColor.systemRed.dynamic(alpha: 0.25).layerColor
     }
 }
@@ -1119,7 +1198,10 @@ final class ErrorMessageView: NSView, TranscriptRow {
 @MainActor
 enum AgentMarkdown {
     private static let bodySize: CGFloat = 13
-    private static let listIndent: CGFloat = 16
+    /// The room a list marker gets before its item's text, wide enough for
+    /// "10." so numbered and bulleted items' text start at one column. Each
+    /// level of nesting indents by as much.
+    private static let listIndent: CGFloat = 20
 
     /// A pipe table, its cells as written. They are rendered when drawn, so a
     /// table still streaming in renders only the cells it gained.
@@ -1318,8 +1400,16 @@ enum AgentMarkdown {
     /// A quote's lines, rendered and dimmed.
     static func renderQuote(_ source: String) -> NSAttributedString {
         let text = NSMutableAttributedString(attributedString: render(source))
-        text.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: NSRange(location: 0, length: text.length))
+        dim(text)
         return text
+    }
+
+    /// Dims `text` but its links, which keep their color so they still
+    /// read as links.
+    private static func dim(_ text: NSMutableAttributedString) {
+        text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+            if value == nil { text.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: range) }
+        }
     }
 
     /// A table line's cells. A pipe after a backslash or inside backticks
@@ -1357,6 +1447,10 @@ enum AgentMarkdown {
         let result = NSMutableAttributedString()
         var inFence = false
         var previousBlank = false
+        // The indents of the list markers the line is nested under, outermost
+        // first: an item's level is its place among them, however many
+        // spaces each level is indented by.
+        var markers: [Int] = []
         for (index, rawLine) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
             let line = String(rawLine)
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -1372,8 +1466,23 @@ enum AgentMarkdown {
             if index > 0 && result.length > 0 {
                 result.append(NSAttributedString(string: "\n", attributes: [.font: body]))
             }
+            var list = ListContext.none
+            if !inFence {
+                let leading = line.prefix(while: { $0 == " " || $0 == "\t" }).reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
+                if listItem(trimmed) != nil {
+                    while let last = markers.last, last > leading { markers.removeLast() }
+                    if markers.last != leading { markers.append(leading) }
+                    list = .item(depth: markers.count - 1)
+                } else if leading > 0 {
+                    // An indented line goes on with the item it is indented under.
+                    while let last = markers.last, last >= leading { markers.removeLast() }
+                    if !markers.isEmpty { list = .continuation(depth: markers.count - 1) }
+                } else {
+                    markers.removeAll()
+                }
+            }
             let start = result.length
-            result.append(rendered(line, trimmed: trimmed, inFence: inFence))
+            result.append(rendered(line, trimmed: trimmed, inFence: inFence, list: list))
             if previousBlank, start > 0 {
                 // A gap before the paragraph that followed a blank line.
                 let range = NSRange(location: start, length: result.length - start)
@@ -1388,16 +1497,33 @@ enum AgentMarkdown {
         return result
     }
 
-    /// Lines rendered before, by their text after an F in a fence or a B
-    /// outside. A streamed answer renders again with every few words, and
-    /// all but its last line are the same each time.
+    /// Where a line sits in a list, which the lines before it decide.
+    private enum ListContext: Hashable {
+        case none
+        /// A list item, at a level from 0.
+        case item(depth: Int)
+        /// An indented line after an item, which lines up with its text.
+        case continuation(depth: Int)
+
+        var key: String {
+            switch self {
+            case .none: "B"
+            case .item(let depth): "L\(depth) "
+            case .continuation(let depth): "C\(depth) "
+            }
+        }
+    }
+
+    /// Lines rendered before, by their text after an F in a fence, or the
+    /// key of their place in a list outside. A streamed answer renders again
+    /// with every few words, and all but its last line are the same each time.
     private static var renderedLines: [String: NSAttributedString] = [:]
     private static let renderedLinesLimit = 4000
 
-    private static func rendered(_ line: String, trimmed: String, inFence: Bool) -> NSAttributedString {
-        let key = (inFence ? "F" : "B") + line
+    private static func rendered(_ line: String, trimmed: String, inFence: Bool, list: ListContext) -> NSAttributedString {
+        let key = (inFence ? "F" : list.key) + line
         if let cached = renderedLines[key] { return cached }
-        let text = inFence ? code(line) : block(line, trimmed: trimmed)
+        let text = inFence ? code(line) : block(line, trimmed: trimmed, list: list)
         if renderedLines.count >= renderedLinesLimit { renderedLines.removeAll(keepingCapacity: true) }
         renderedLines[key] = text
         return text
@@ -1415,7 +1541,30 @@ enum AgentMarkdown {
         return style
     }
 
-    private static func block(_ line: String, trimmed: String) -> NSAttributedString {
+    /// A list item's marker and text: a bullet, a number, or a task's box.
+    private enum ListMarker {
+        case bullet
+        case number(Substring)
+        case task(done: Bool)
+    }
+
+    private static func listItem(_ trimmed: String) -> (marker: ListMarker, text: Substring)? {
+        for marker in ["- ", "* ", "+ "] where trimmed.hasPrefix(marker) {
+            let rest = trimmed.dropFirst(2)
+            // A task with no text yet, as while it streams in, is a task too.
+            for (box, done) in [("[ ] ", false), ("[x] ", true), ("[X] ", true)] where rest.hasPrefix(box) || rest == box.dropLast() {
+                return (.task(done: done), rest.dropFirst(4))
+            }
+            return (.bullet, rest)
+        }
+        if let dot = trimmed.firstIndex(of: "."), trimmed[..<dot].allSatisfy(\.isNumber), !trimmed[..<dot].isEmpty,
+            trimmed[dot...].hasPrefix(". ") {
+            return (.number(trimmed[..<dot]), trimmed[dot...].dropFirst(2))
+        }
+        return nil
+    }
+
+    private static func block(_ line: String, trimmed: String, list: ListContext) -> NSAttributedString {
         // Headings: "# Title" to "###### Title".
         if let hashes = trimmed.firstIndex(where: { $0 != "#" }), trimmed.hasPrefix("#"),
             trimmed.distance(from: trimmed.startIndex, to: hashes) <= 6, trimmed[hashes] == " " {
@@ -1428,27 +1577,33 @@ enum AgentMarkdown {
             text.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: text.length))
             return text
         }
-        // Nested lists indent by two spaces a level.
-        let depth = CGFloat((line.prefix(while: { $0 == " " }).count) / 2)
-        let indent = listIndent * (depth + 1)
-        for marker in ["- ", "* ", "+ "] where trimmed.hasPrefix(marker) {
-            let text = inline("•\t" + trimmed.dropFirst(2), font: body)
+        if case .item(let depth) = list, let (marker, rest) = listItem(trimmed) {
+            // Every kind of marker sits in the same column before the text.
+            let indent = listIndent * CGFloat(depth + 1)
+            let prefix = switch marker {
+            case .bullet: "•"
+            case .number(let number): "\(number)."
+            case .task(let done): done ? "☑" : "☐"
+            }
+            let markerColor: NSColor = if case .task = marker { .secondaryLabelColor } else { .labelColor }
+            let text = inline(rest, font: body)
+            // A finished task's text is dimmed, so what is left stands out.
+            if case .task(true) = marker { dim(text) }
+            text.insert(NSAttributedString(string: prefix + "\t", attributes: [.font: body, .foregroundColor: markerColor]), at: 0)
             text.addAttribute(.paragraphStyle, value: paragraph(indent: indent, firstLineIndent: indent - listIndent),
                               range: NSRange(location: 0, length: text.length))
             return text
         }
-        if let dot = trimmed.firstIndex(of: "."), trimmed[..<dot].allSatisfy(\.isNumber), !trimmed[..<dot].isEmpty,
-            trimmed[dot...].hasPrefix(". ") {
-            let number = trimmed[..<dot]
-            let text = inline("\(number).\t" + trimmed[dot...].dropFirst(2), font: body)
-            text.addAttribute(.paragraphStyle, value: paragraph(indent: indent + 4, firstLineIndent: indent - listIndent),
+        if case .continuation(let depth) = list {
+            let text = inline(trimmed, font: body)
+            text.addAttribute(.paragraphStyle, value: paragraph(indent: listIndent * CGFloat(depth + 1)),
                               range: NSRange(location: 0, length: text.length))
             return text
         }
         if trimmed.hasPrefix(">") {
             let text = inline(trimmed.dropFirst().trimmingCharacters(in: .whitespaces), font: body)
             let range = NSRange(location: 0, length: text.length)
-            text.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: range)
+            dim(text)
             text.addAttribute(.paragraphStyle, value: paragraph(indent: 10), range: range)
             return text
         }
@@ -1948,19 +2103,22 @@ final class MarkdownTableContentView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard rowEdges.count > 1 else { return }
-        let frame = NSRect(origin: .zero, size: tableSize).insetBy(dx: 0.5, dy: 0.5)
-        let outline = NSBezierPath(roundedRect: frame, xRadius: Theme.Radius.small, yRadius: Theme.Radius.small)
+        // The outline's stroke centers on the frame's edge, so it is inset by half.
+        let line = Theme.hairlineWidth
+        let frame = NSRect(origin: .zero, size: tableSize).insetBy(dx: line / 2, dy: line / 2)
+        // The same corners as a code block, so the two read as one kind of box.
+        let outline = NSBezierPath(roundedRect: frame, xRadius: Theme.Radius.row, yRadius: Theme.Radius.row)
         NSGraphicsContext.saveGraphicsState()
         outline.addClip()
         Theme.fill(Theme.Fill.rest).setFill()
         NSRect(x: 0, y: 0, width: tableSize.width, height: rowEdges[1]).fill()
         Theme.hairline.setFill()
         for edge in rowEdges.dropFirst().dropLast() {
-            NSRect(x: 0, y: edge - 0.5, width: tableSize.width, height: 1).fill()
+            NSRect(x: 0, y: edge - line / 2, width: tableSize.width, height: line).fill()
         }
         NSGraphicsContext.restoreGraphicsState()
         Theme.hairline.setStroke()
-        outline.lineWidth = 1
+        outline.lineWidth = line
         outline.stroke()
     }
 }
@@ -1977,7 +2135,7 @@ final class MarkdownCodeView: NSView, TranscriptRow {
     private let scroll = TranscriptHorizontalScrollView()
     /// Holds the text with the padding around it, at the text's own width.
     private let document = NSView()
-    private let label = NSTextField(labelWithString: "")
+    private let label = MarkdownCodeView.codeLabel()
     private var code = ""
     /// The text's size, measured when it changes: it doesn't wrap, so a new
     /// width leaves it as it was.
@@ -1996,12 +2154,6 @@ final class MarkdownCodeView: NSView, TranscriptRow {
     init() {
         super.init(frame: .zero)
         wantsLayer = true
-        label.font = Self.font
-        label.isSelectable = true
-        label.lineBreakMode = .byClipping
-        label.cell?.wraps = false
-        label.cell?.isScrollable = false
-        label.maximumNumberOfLines = 0
 
         languageLabel.font = .systemFont(ofSize: Theme.FontSize.caption, weight: .medium)
         languageLabel.textColor = .secondaryLabelColor
@@ -2050,7 +2202,7 @@ final class MarkdownCodeView: NSView, TranscriptRow {
             rule.topAnchor.constraint(equalTo: header.bottomAnchor),
             rule.leadingAnchor.constraint(equalTo: leadingAnchor),
             rule.trailingAnchor.constraint(equalTo: trailingAnchor),
-            rule.heightAnchor.constraint(equalToConstant: 1),
+            rule.heightAnchor.constraint(equalToConstant: Theme.hairlineWidth),
             scroll.topAnchor.constraint(equalTo: rule.bottomAnchor),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -2067,13 +2219,52 @@ final class MarkdownCodeView: NSView, TranscriptRow {
             languageLabel.stringValue = language.isEmpty ? "Code" : language
         }
         guard code != self.code else { return }
+        let lines = code.split(separator: "\n", omittingEmptySubsequences: false)
+        // Streaming only adds to the end, so the lines before the last one
+        // keep their widths; any other change measures every line again.
+        let kept = code.hasPrefix(self.code) ? max(0, lineWidths.count - 1) : 0
+        lineWidths.removeSubrange(kept...)
+        lineWidths += lines[kept...].map { Self.width(of: $0) }
         self.code = code
         label.stringValue = code.isEmpty ? " " : code
-        let measured = label.intrinsicContentSize
+        // What the label's own size would be: its widest line, and a line
+        // height for each line, an empty last one included.
+        let measured = code.isEmpty
+            ? Self.measure(" ")
+            : NSSize(width: lineWidths.max() ?? 0, height: CGFloat(lines.count) * Self.lineHeight)
         // Rounded up, plus the cell's 2pt inset on each side: a fractional or
         // inset-less width clips the last glyph of the longest line.
         textSize = NSSize(width: ceil(measured.width) + Self.cellInset, height: ceil(measured.height))
         relayout()
+    }
+
+    /// Each line's width, as `measure` gives it.
+    private var lineWidths: [CGFloat] = []
+
+    /// Measures text one line at a time, set up as `label` is, so the lines'
+    /// widths and heights add up to what `label` measures for them together.
+    private static let measuringLabel = codeLabel()
+    private static let lineHeight = measure(" ").height
+
+    private static func measure(_ text: String) -> NSSize {
+        measuringLabel.stringValue = text
+        return measuringLabel.intrinsicContentSize
+    }
+
+    /// An empty line takes no width among others.
+    private static func width(of line: Substring) -> CGFloat {
+        line.isEmpty ? 0 : measure(String(line)).width
+    }
+
+    private static func codeLabel() -> NSTextField {
+        let label = NSTextField(labelWithString: "")
+        label.font = font
+        label.isSelectable = true
+        label.lineBreakMode = .byClipping
+        label.cell?.wraps = false
+        label.cell?.isScrollable = false
+        label.maximumNumberOfLines = 0
+        return label
     }
 
     func fit(width: CGFloat) {
@@ -2091,7 +2282,7 @@ final class MarkdownCodeView: NSView, TranscriptRow {
         document.frame = NSRect(x: 0, y: 0, width: documentWidth, height: size.height + p.top + p.bottom)
         // The document isn't flipped, so the bottom padding is the origin.
         label.frame = NSRect(x: p.left, y: p.bottom, width: size.width, height: size.height)
-        let total = Self.headerHeight + 1 + size.height + p.top + p.bottom
+        let total = Self.headerHeight + Theme.hairlineWidth + size.height + p.top + p.bottom
         if height.constant != total { height.constant = total }
         updateFade()
     }
@@ -2145,7 +2336,7 @@ final class MarkdownCodeView: NSView, TranscriptRow {
         layer?.cornerRadius = Theme.Radius.row
         layer?.cornerCurve = .continuous
         layer?.backgroundColor = Theme.fill(Theme.Fill.rest).layerColor
-        layer?.borderWidth = 1
+        layer?.borderWidth = Theme.hairlineWidth
         layer?.borderColor = Theme.hairline.layerColor
         rule.layer?.backgroundColor = Theme.hairline.layerColor
     }

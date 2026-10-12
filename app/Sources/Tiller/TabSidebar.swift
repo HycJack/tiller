@@ -5,7 +5,10 @@ import AppKit
 /// own, so it reads as one surface with the toolbar.
 final class TabSidebarView: NSView {
     static let collapsedWidth: CGFloat = 52
-    static let widthRange: ClosedRange<CGFloat> = 80...400
+    /// Expanded, it is always wide enough for the tabs' titles; narrower
+    /// would show only icons with the button still where titles go. A
+    /// narrower saved width is clamped up when the sidebar is fitted.
+    static let widthRange: ClosedRange<CGFloat> = (TabStripView.titleMinWidth + 2 * inset)...400
     static let defaultWidth: CGFloat = 220
 
     let collapseButton = Theme.iconButton("sidebar.left", label: "Collapse Tabs")

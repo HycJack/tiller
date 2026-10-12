@@ -203,7 +203,12 @@ final class ExtensionPopover: NSObject, NSPopoverDelegate, TabDelegate {
         revealed = true
         revealTimeout?.cancel()
         revealTimeout = nil
-        popover.contentViewController?.view.window?.alphaValue = 1
+        if let window = popover.contentViewController?.view.window {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Theme.reduceMotion ? 0 : Theme.Duration.quick
+                window.animator().alphaValue = 1
+            }
+        }
         tab.focus()
     }
 

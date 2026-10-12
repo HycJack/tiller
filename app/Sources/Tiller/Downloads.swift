@@ -148,7 +148,9 @@ final class DownloadsButton: NSButton {
 
     func refresh() {
         let store = DownloadStore.shared
-        let progress = store.activeProgress
+        // To the whole percent, so the ring is drawn again only when that
+        // changes rather than on every chunk that arrives.
+        let progress = store.activeProgress.map { ($0 * 100).rounded() / 100 }
         let active = store.hasActive
         guard progress != self.progress || active != self.active || image == nil else { return }
         self.progress = progress
@@ -543,10 +545,15 @@ private final class DownloadRowView: NSView {
         layer.borderColor = Theme.selectionOutline(selected: hover).layerColor
     }
 
+    private var hoverArea: NSTrackingArea?
+
+    // Only its own area is replaced, leaving AppKit's, such as the tooltip's.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
     }
 
     override func mouseEntered(with event: NSEvent) { isHovered = true }

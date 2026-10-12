@@ -74,7 +74,7 @@ final class AddressBarView: NSView {
         buttons.setContentHuggingPriority(.required, for: .horizontal)
 
         let content = CapsuleContentView()
-        content.layer?.cornerRadius = 15
+        content.layer?.cornerRadius = Theme.Capsule.radius
         content.layer?.cornerCurve = .continuous
         content.layer?.masksToBounds = true
         progressFill.alphaValue = 0
@@ -84,7 +84,7 @@ final class AddressBarView: NSView {
             content.addSubview(view)
         }
         glass.contentView = content
-        glass.cornerRadius = 15
+        glass.cornerRadius = Theme.Capsule.radius
         glass.translatesAutoresizingMaskIntoConstraints = false
         addSubview(glass)
 
@@ -94,7 +94,7 @@ final class AddressBarView: NSView {
             capsuleLeading,
             capsuleTrailing,
             glass.centerYAnchor.constraint(equalTo: centerYAnchor),
-            glass.heightAnchor.constraint(equalToConstant: 30),
+            glass.heightAnchor.constraint(equalToConstant: Theme.Capsule.height),
 
             statusIcon.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
             statusIcon.centerYAnchor.constraint(equalTo: content.centerYAnchor),
@@ -281,7 +281,10 @@ private final class CapsuleContentView: NSView {
 /// site dimmed; a click selects it all, so typing replaces it.
 final class AddressField: NSTextField {
     var url = "" {
-        didSet { if !isEditing { showURL() } }
+        // Tabs report the same URL with every title or loading change, and
+        // building the text again for it would be wasted. Editing's end
+        // shows the URL on its own.
+        didSet { if url != oldValue, !isEditing { showURL() } }
     }
 
     /// Called with true when typing starts and false when it ends.

@@ -289,6 +289,14 @@ class SettingsPane: NSViewController {
         return grid.addRow(with: [title, control])
     }
 
+    /// Enables or disables a row's control and dims its label to match, so a
+    /// setting that depends on another reads as off, not just its control.
+    static func setRow(_ row: NSGridRow?, enabled: Bool) {
+        guard let row else { return }
+        (row.cell(at: 0).contentView as? NSTextField)?.textColor = enabled ? .labelColor : .disabledControlTextColor
+        if let control = row.cell(at: 1).contentView as? NSControl { control.isEnabled = enabled }
+    }
+
     /// Gives `control` the label of `row` as its title for VoiceOver.
     static func linkLabel(of row: NSGridRow, to control: NSView) {
         control.setAccessibilityTitleUIElement(row.cell(at: 0).contentView)
@@ -427,6 +435,8 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
     private var tabLayoutPopUp: NSPopUpButton?
     private var unloadTabsButton: NSButton?
     private var unloadDelayPopUp: NSPopUpButton?
+    private var unloadDelayRow: NSGridRow?
+    private var templateRow: NSGridRow?
     private var appearancePopUp: NSPopUpButton?
     private var accentPopUp: NSPopUpButton?
     private var remoteDebuggingButton: NSButton?
@@ -491,9 +501,9 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
             TabUnloadDelay.allCases, title: \.displayName, selected: settings.tabUnloadDelay,
             target: self, action: #selector(unloadDelayChanged(_:))
         )
-        unloadDelayPopUp.isEnabled = settings.unloadsInactiveTabs
         self.unloadDelayPopUp = unloadDelayPopUp
-        addRow("Unload after:", unloadDelayPopUp)
+        unloadDelayRow = addRow("Unload after:", unloadDelayPopUp)
+        Self.setRow(unloadDelayRow, enabled: settings.unloadsInactiveTabs)
         addNote(Self.note("Also when the Mac runs low on memory. An unloaded tab reloads when you select it."))
 
         let appearancePopUp = Self.popUp(
@@ -527,7 +537,7 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
         templateField.stringValue = settings.searchTemplate
         templateField.placeholderString = "https://example.com/search?q=%s"
         templateField.delegate = self
-        addRow("Custom search URL:", Self.fixWidth(templateField))
+        templateRow = addRow("Custom search URL:", Self.fixWidth(templateField))
         addNote(templateNote)
         showTemplateState()
 
@@ -565,7 +575,7 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
         tabLayoutPopUp?.selectItem(at: TabLayout.allCases.firstIndex(of: settings.tabLayout) ?? 0)
         unloadTabsButton?.state = settings.unloadsInactiveTabs ? .on : .off
         unloadDelayPopUp?.selectItem(at: TabUnloadDelay.allCases.firstIndex(of: settings.tabUnloadDelay) ?? 0)
-        unloadDelayPopUp?.isEnabled = settings.unloadsInactiveTabs
+        Self.setRow(unloadDelayRow, enabled: settings.unloadsInactiveTabs)
         appearancePopUp?.selectItem(at: Appearance.allCases.firstIndex(of: Settings.appearance) ?? 0)
         accentPopUp?.selectItem(at: AccentTheme.allCases.firstIndex(of: Settings.accentTheme) ?? 0)
         remoteDebuggingButton?.state = Settings.remoteDebuggingEnabled ? .on : .off
@@ -618,7 +628,7 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
 
     @objc private func unloadTabsChanged(_ sender: NSButton) {
         settings.unloadsInactiveTabs = sender.state == .on
-        unloadDelayPopUp?.isEnabled = sender.state == .on
+        Self.setRow(unloadDelayRow, enabled: sender.state == .on)
     }
 
     @objc private func unloadDelayChanged(_ sender: NSPopUpButton) {
@@ -672,10 +682,15 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
     private func showTemplateState() {
         let custom = settings.searchEngine == .custom
         templateField.isEnabled = custom
+        if let label = templateRow?.cell(at: 0).contentView as? NSTextField {
+            label.textColor = custom ? .labelColor : .disabledControlTextColor
+        }
         if custom && !Settings.isValidSearchTemplate(settings.searchTemplate) {
             Self.show("Needs an http(s) URL with %s. Google is used until then.", in: templateNote, warning: true)
-        } else {
+        } else if custom {
             Self.show("Put %s where the search terms go.", in: templateNote)
+        } else {
+            Self.show("Choose Custom as the search engine to use your own.", in: templateNote)
         }
     }
 }

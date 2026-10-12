@@ -661,6 +661,7 @@ private final class SymbolBadge: NSView {
 
     private let symbol: NSImage
     private let image: NSImageView
+    private static let side: CGFloat = 48
 
     init(symbol: String) {
         self.symbol = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)!
@@ -672,8 +673,8 @@ private final class SymbolBadge: NSView {
         image.translatesAutoresizingMaskIntoConstraints = false
         addSubview(image)
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: 48),
-            heightAnchor.constraint(equalToConstant: 48),
+            widthAnchor.constraint(equalToConstant: Self.side),
+            heightAnchor.constraint(equalToConstant: Self.side),
             image.centerXAnchor.constraint(equalTo: centerXAnchor),
             image.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
@@ -684,8 +685,9 @@ private final class SymbolBadge: NSView {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        layer?.cornerRadius = 24
-        let color = logo == nil ? Theme.accent(Theme.Accent.soft) : Theme.fill(0.06)
+        // Round, at any size.
+        layer?.cornerRadius = Self.side / 2
+        let color = logo == nil ? Theme.accent(Theme.Accent.soft) : Theme.fill(Theme.Fill.rest)
         layer?.backgroundColor = color.layerColor
     }
 }
@@ -704,6 +706,10 @@ private final class SuggestionButton: NSView {
         let icon = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil)!
             .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))!)
         icon.contentTintColor = .secondaryLabelColor
+        // The symbols differ in width, so each sits centered in a slot of one
+        // width and the prompts start at one x.
+        icon.imageAlignment = .alignCenter
+        icon.setContentHuggingPriority(.required, for: .horizontal)
         let label = NSTextField(labelWithString: title)
         label.font = .systemFont(ofSize: Theme.FontSize.secondary)
         let stack = NSStackView(views: [icon, label])
@@ -711,6 +717,7 @@ private final class SuggestionButton: NSView {
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 16),
             stack.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),

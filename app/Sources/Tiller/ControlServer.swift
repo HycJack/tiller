@@ -102,7 +102,12 @@ final class ControlServer {
     }
 
     private static func send(_ reply: [String: Any], token: UInt64) {
-        let data = (try? JSONSerialization.data(withJSONObject: reply)) ?? Data(#"{"error":"could not encode reply"}"#.utf8)
-        String(decoding: data, as: UTF8.self).withCString { tiller_ipc_reply(token, $0) }
+        var data = (try? JSONSerialization.data(withJSONObject: reply)) ?? Data(#"{"error":"could not encode reply"}"#.utf8)
+        // Passed as is, NUL-terminated, rather than through a String, which
+        // would copy and check every byte of a large reply on the main
+        // thread. The core checks the text on the connection's thread, and
+        // JSON escapes any NUL inside it.
+        data.append(0)
+        data.withUnsafeBytes { tiller_ipc_reply(token, $0.bindMemory(to: CChar.self).baseAddress) }
     }
 }

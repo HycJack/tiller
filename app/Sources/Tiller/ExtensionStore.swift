@@ -414,11 +414,15 @@ final class ExtensionStore {
     }
 
     /// Chromium's "Failed to load extension from: <folder>. <reason>" lines
-    /// in `chrome_debug.log`, which it starts afresh at each launch.
+    /// in `chrome_debug.log`, which it starts afresh at each launch. They are
+    /// written while Chromium starts, so only the start of the log is read:
+    /// by the time Settings asks, a long session may have grown it a lot.
     private static func readLoadErrors() -> [String: String] {
-        guard let log = try? String(contentsOfFile: Profiles.chromiumRoot + "/chrome_debug.log", encoding: .utf8) else {
-            return [:]
-        }
+        guard let handle = FileHandle(forReadingAtPath: Profiles.chromiumRoot + "/chrome_debug.log"),
+            let data = try? handle.read(upToCount: 1 << 20)
+        else { return [:] }
+        try? handle.close()
+        let log = String(decoding: data, as: UTF8.self)
         let marker = "Failed to load extension from: "
         var errors: [String: String] = [:]
         for line in log.split(separator: "\n") {

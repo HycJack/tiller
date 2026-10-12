@@ -20,6 +20,11 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
     private var highlighted: Int?
     /// Bumped on every keystroke so a slow query can't show stale results.
     private var generation = 0
+    /// Bumped on every show and hide, so a fade-out that a show overtook
+    /// leaves the panel up.
+    private var fadeGeneration = 0
+    /// True while the panel fades out, still visible but on its way.
+    private var isFadingOut = false
 
     private static let limit = 7
     private static let rowHeight = Theme.RowHeight.compact
@@ -79,15 +84,37 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
         addressBar.field.delegate = self
     }
 
-    var isShown: Bool { panel.isVisible }
+    var isShown: Bool { panel.isVisible && !isFadingOut }
 
-    func hide() {
+    /// Fades the list out, or takes it away at once when `animated` is
+    /// false, as when a suggestion opens, so it doesn't linger over the
+    /// page that follows.
+    func hide(animated: Bool = true) {
         generation += 1
         highlighted = nil
         shownPages = []
         guard panel.isVisible else { return }
+        fadeGeneration += 1
+        guard animated else { return close() }
+        guard !isFadingOut else { return }
+        isFadingOut = true
+        let fade = fadeGeneration
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Theme.reduceMotion ? 0 : Theme.Duration.quick
+            panel.animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.fadeGeneration == fade else { return }
+                self.close()
+            }
+        }
+    }
+
+    private func close() {
+        isFadingOut = false
         panel.parent?.removeChildWindow(panel)
         panel.orderOut(nil)
+        panel.alphaValue = 1
     }
 
     // MARK: NSTextFieldDelegate
@@ -115,7 +142,7 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        guard panel.isVisible else {
+        guard isShown else {
             // Escape with no list up puts the page's URL back, as in Safari.
             guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
             addressBar.field.revert()
@@ -130,7 +157,7 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
             hide()
         case #selector(NSResponder.insertNewline(_:)):
             guard let index = highlighted, rows.indices.contains(index) else {
-                hide()
+                hide(animated: false)
                 return false
             }
             open(index, .returnKey(OpenDisposition.currentFlags))
@@ -172,8 +199,19 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
         let frame = window.convertToScreen(capsule.convert(capsule.bounds, to: nil))
         let height = CGFloat(rows.count) * Self.rowHeight + 2 * Self.inset
         panel.setFrame(NSRect(x: frame.minX, y: frame.minY - 6 - height, width: frame.width, height: height), display: true)
+        fadeGeneration += 1
+        let appearing = !panel.isVisible
+        if appearing { panel.alphaValue = 0 }
         if panel.parent == nil { window.addChildWindow(panel, ordered: .above) }
         panel.orderFront(nil)
+        // Eases in when it first comes up, or back from a fade-out.
+        if appearing || isFadingOut {
+            isFadingOut = false
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Theme.reduceMotion ? 0 : Theme.Duration.quick
+                panel.animator().alphaValue = 1
+            }
+        }
     }
 
     /// With `announce`, as when Up or Down moves the highlight, VoiceOver
@@ -195,7 +233,7 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
     private func open(_ index: Int, _ disposition: OpenDisposition) {
         guard rows.indices.contains(index) else { return }
         let url = rows[index].url(settings: profile.settings)
-        hide()
+        hide(animated: false)
         onOpen?(url, disposition)
     }
 }
@@ -413,10 +451,15 @@ private final class SuggestionRow: NSView {
         }
     }
 
+    private var hoverArea: NSTrackingArea?
+
+    // Only its own area is replaced, leaving AppKit's, such as the tooltip's.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self))
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
     }
 
     override func mouseEntered(with event: NSEvent) { onHover?() }

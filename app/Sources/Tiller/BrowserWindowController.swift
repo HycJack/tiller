@@ -68,6 +68,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         view.onOpen = { [weak self] url, disposition in self?.open(url, disposition) }
         return view
     }()
+    /// Whether the start page is fading out, to be taken away when it ends.
+    private var startPageFading = false
     /// The import sheet while it is up.
     private var chromeImport: ChromeImportController?
     /// The link under the mouse, at the bottom left of the page.
@@ -93,7 +95,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     private lazy var tabStripHeight = tabStrip.heightAnchor.constraint(equalToConstant: 28)
     /// The address bar's size in the toolbar, fitted like the tab strip's.
     private lazy var addressWidth = addressBar.widthAnchor.constraint(equalToConstant: 600)
-    private lazy var addressHeight = addressBar.heightAnchor.constraint(equalToConstant: 30)
+    private lazy var addressHeight = addressBar.heightAnchor.constraint(equalToConstant: Theme.Capsule.height)
     /// Holds the address bar while the tabs are along the top.
     private var addressAccessory: NSTitlebarAccessoryViewController?
 
@@ -483,13 +485,30 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// the page it goes to has arrived.
     private func updateStartPage(for tab: Tab) {
         if tab.isBlank || tab.isLeavingBlank {
-            guard startPage.superview !== tab.hostView else { return }
-            startPage.frame = tab.hostView.bounds
-            startPage.autoresizingMask = [.width, .height]
-            tab.hostView.addSubview(startPage, positioned: .above, relativeTo: nil)
+            let fading = startPageFading
+            startPageFading = false
+            if startPage.superview === tab.hostView {
+                // Blank again while it faded out: it comes back.
+                guard fading else { return }
+                withEasing(Theme.Duration.quick) { startPage.animator().alphaValue = 1 }
+            } else {
+                // Moved from a tab it was fading out over: its fade stops.
+                startPage.layer?.removeAllAnimations()
+                startPage.alphaValue = 1
+                startPage.frame = tab.hostView.bounds
+                startPage.autoresizingMask = [.width, .height]
+                tab.hostView.addSubview(startPage, positioned: .above, relativeTo: nil)
+            }
             startPage.reload()
-        } else if startPage.superview === tab.hostView {
-            startPage.removeFromSuperview()
+        } else if startPage.superview === tab.hostView, !startPageFading {
+            startPageFading = true
+            // The page fades in from under it rather than cutting in.
+            fadeOut(startPage) { [weak self] in
+                guard let self, self.startPageFading else { return }
+                self.startPageFading = false
+                self.startPage.removeFromSuperview()
+                self.startPage.alphaValue = 1
+            }
         }
     }
 
@@ -1113,12 +1132,25 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// bar gets the same in the tabs' place, plus the new-tab button's.
     private func fitTabStrip() {
         guard let width = window?.frame.width else { return }
-        let profileWidth = profileName == nil ? 0 : profileButton.fittingSize.width + 12
-        let extensionsWidth = extensionBar.isEmpty ? 0 : extensionBar.fittingSize.width + 12
+        let profileWidth = profileName == nil ? 0 : fittedWidth(profileButton, cache: &profileButtonWidth) + 12
+        let extensionsWidth = extensionBar.isEmpty ? 0 : fittedWidth(extensionBar, cache: &extensionBarWidth) + 12
         let downloadsWidth: CGFloat = showsToolbarItem(Item.downloads) ? 40 : 0
         tabStripWidth.constant = max(200, width - 370 + tabStripSlack - profileWidth - extensionsWidth - downloadsWidth)
         addressWidth.constant = max(200, width - 330 + addressSlack - profileWidth - extensionsWidth - downloadsWidth)
         scheduleToolbarGapCheck()
+    }
+
+    /// The profile button's and extension bar's fitting widths, which only
+    /// change with their content, kept so a live resize doesn't lay them out
+    /// at every step. Nil until measured, and again when the content changes.
+    private var profileButtonWidth: CGFloat?
+    private var extensionBarWidth: CGFloat?
+
+    private func fittedWidth(_ view: NSView, cache: inout CGFloat?) -> CGFloat {
+        if let width = cache { return width }
+        let width = view.fittingSize.width
+        cache = width
+        return width
     }
 
     /// What the estimates in `fitTabStrip` leave over, learned from where
@@ -1256,7 +1288,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     private func applyTabLayout() {
         guard let window else { return }
         let vertical = tabLayout == .vertical
-        suggestions.hide()
+        // The bar moves, so the list goes at once rather than fading where it was.
+        suggestions.hide(animated: false)
         if let addressAccessory, let index = window.titlebarAccessoryViewControllers.firstIndex(of: addressAccessory) {
             window.removeTitlebarAccessoryViewController(at: index)
         }
@@ -1356,6 +1389,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     func showProfile(name: String?) {
         profileName = name
         profileButton.title = name ?? ""
+        profileButtonWidth = nil
         showToolbarItem(Item.profile, name != nil)
         updateWindowTitle()
         fitTabStrip()
@@ -1461,7 +1495,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         suggestions.onOpen = { [weak self] url, disposition in self?.open(url, disposition) }
         extensionBar.onPopup = { [weak self] manifest, anchor in self?.showExtensionPopup(manifest, from: anchor) }
         extensionBar.onOpen = { [weak self] url in self?.openInNewTab(url) }
-        extensionBar.onResize = { [weak self] in self?.fitTabStrip() }
+        extensionBar.onResize = { [weak self] in
+            self?.extensionBarWidth = nil
+            self?.fitTabStrip()
+        }
     }
 
     /// Opens the extension's popup under `anchor`, closing any other first.

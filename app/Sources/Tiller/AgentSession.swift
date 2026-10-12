@@ -212,7 +212,8 @@ final class AgentSession {
     /// sent, so a message with screenshots that the CLI is slow to read
     /// doesn't hold the main thread, and an interrupt never overtakes it.
     private let writer = DispatchQueue(label: "tiller.agent.stdin", qos: .userInitiated)
-    private var stderrTail = ""
+    /// The end of the running process's stderr, shown if it exits mid-turn.
+    private var stderrTail = StderrTail()
     /// Bumped for every process, so output and exit events from a stopped one are ignored.
     private var generation = 0
     private var interruptTimer: Timer?
@@ -328,10 +329,14 @@ final class AgentSession {
             guard !messages.isEmpty else { return }
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.received(messages, generation: generation) } }
         }
-        errors.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        // Kept off the main thread: some CLIs log steadily to stderr, and
+        // only its end is ever shown.
+        let tail = StderrTail()
+        stderrTail = tail
+        errors.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty { handle.readabilityHandler = nil }
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.received(stderr: data, generation: generation) } }
+            tail.append(data)
         }
         process.terminationHandler = { [weak self] process in
             let status = process.terminationStatus
@@ -446,7 +451,7 @@ final class AgentSession {
     private func reset() {
         process = nil
         stdin = nil
-        stderrTail = ""
+        stderrTail = StderrTail()
         isBusy = false
         interrupted = false
         interruptTimer?.invalidate()
@@ -504,11 +509,6 @@ final class AgentSession {
             case .qodercli, .claude, .grok: handle(message.object)
             }
         }
-    }
-
-    private func received(stderr data: Data, generation: Int) {
-        guard generation == self.generation, !data.isEmpty else { return }
-        stderrTail = String((stderrTail + String(decoding: data, as: UTF8.self)).suffix(2000))
     }
 
     private func handle(_ message: [String: Any]) {
@@ -939,18 +939,30 @@ final class AgentSession {
         }
     }
 
-    /// First line of a tool result's text. Images are just noted.
+    /// First line of a tool result's text. Images are just noted. Results
+    /// such as a page's text run to hundreds of KB, so only the start of the
+    /// first block with text is looked at, not the whole result.
     private static func summary(of content: Any?) -> String {
-        var text = ""
+        var text: Substring = ""
         if let string = content as? String {
-            text = string
+            text = firstLine(of: string)
         } else if let blocks = content as? [[String: Any]] {
-            text = blocks.compactMap { block in
-                block["type"] as? String == "image" ? "[image]" : block["text"] as? String
-            }.joined(separator: " ")
+            for block in blocks {
+                if block["type"] as? String == "image" { text = "[image]"; break }
+                if let string = block["text"] as? String {
+                    text = firstLine(of: string)
+                    if !text.isEmpty { break }
+                }
+            }
         }
-        let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
-        return line.count > 160 ? String(line.prefix(160)) + "…" : line
+        let cut = text.prefix(161)
+        return cut.count > 160 ? String(cut.prefix(160)) + "…" : String(cut)
+    }
+
+    /// The first line of `text` that isn't empty.
+    private static func firstLine(of text: String) -> Substring {
+        guard let start = text.firstIndex(where: { !$0.isNewline }) else { return "" }
+        return text[start...].prefix(while: { !$0.isNewline })
     }
 
     /// grok exits right after printing its result, which may still be on its
@@ -974,7 +986,7 @@ final class AgentSession {
         guard generation == self.generation, process != nil else { return }
         // grok's process ends with each turn.
         if kind == .grok, !isBusy { return reset() }
-        let tail = stderrTail.split(whereSeparator: \.isNewline).suffix(3).joined(separator: "\n")
+        let tail = stderrTail.text.split(whereSeparator: \.isNewline).suffix(3).joined(separator: "\n")
         reset()
         onEvent?(.exited(message: "\(kind.displayName) exited with status \(status)." + (tail.isEmpty ? "" : "\n" + tail)))
     }
@@ -984,6 +996,24 @@ final class AgentSession {
 /// that aren't JSON are dropped: qodercli prints some notices to stdout. Fed
 /// from one handle's readability handler, which runs one call at a time,
 /// so nothing else touches the buffer.
+/// The last few KB of a process's stderr, appended to from its pipe's queue
+/// and read on the main actor when the process exits.
+final class StderrTail: @unchecked Sendable {
+    private static let limit = 4096
+    private let lock = NSLock()
+    private var buffer = Data()
+
+    func append(_ data: Data) {
+        guard !data.isEmpty else { return }
+        lock.withLock {
+            buffer.append(data)
+            if buffer.count > Self.limit { buffer.removeFirst(buffer.count - Self.limit) }
+        }
+    }
+
+    var text: String { lock.withLock { String(decoding: buffer, as: UTF8.self) } }
+}
+
 final class JSONLineParser: @unchecked Sendable {
     /// A parsed line. The dictionary is built here and read on the main
     /// actor, never written again, which is what makes handing it over safe.

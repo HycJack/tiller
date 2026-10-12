@@ -93,8 +93,15 @@ final class Tab {
     /// time to paint, for the same reason.
     private var paintCover: NSView?
     private var paintWait: DispatchWorkItem?
-    /// From a page's arrival to its likely first paint.
+    /// The longest wait from a page's arrival to showing it, for a page
+    /// whose load neither ends nor nears its end sooner.
     private static let paintDelay: TimeInterval = 0.25
+    /// The wait for a page that arrives with its load already done, as one
+    /// from the back/forward cache does.
+    private static let cachedPaintDelay: TimeInterval = 0.1
+    /// True while such a page waits: its load's end and progress came
+    /// before it painted, so only the wait shows it.
+    private var waitsOutPaint = false
 
     var displayTitle: String {
         if !title.isEmpty && title != url { return title }
@@ -219,7 +226,9 @@ final class Tab {
             MainActor.assumeIsolated { self?.showPage() }
         }
         paintWait = wait
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.paintDelay, execute: wait)
+        waitsOutPaint = progress >= 1
+        let delay = waitsOutPaint ? Self.cachedPaintDelay : Self.paintDelay
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: wait)
     }
 
     /// Stops waiting for a first paint, when it has likely happened or the
@@ -227,7 +236,11 @@ final class Tab {
     private func showPage() {
         paintWait?.cancel()
         paintWait = nil
-        paintCover?.removeFromSuperview()
+        waitsOutPaint = false
+        if let cover = paintCover {
+            // A new cover is a new view, so this one only ever goes.
+            fadeOut(cover) { cover.removeFromSuperview() }
+        }
         paintCover = nil
         guard isLeavingBlank else { return }
         isLeavingBlank = false
@@ -338,6 +351,7 @@ final class Tab {
         canGoForward = false
         paintWait?.cancel()
         paintWait = nil
+        waitsOutPaint = false
         paintCover?.removeFromSuperview()
         paintCover = nil
         isLeavingBlank = false
@@ -376,7 +390,7 @@ final class Tab {
             canGoBack = back
             canGoForward = forward
             // A load that ended, loaded or not, has nothing more to wait for.
-            if ended { showPage() }
+            if ended && !waitsOutPaint { showPage() }
             delegate?.tabDidChange(self)
         }
     }
@@ -384,6 +398,8 @@ final class Tab {
     nonisolated private func progressChanged(_ progress: Double) {
         MainActor.assumeIsolated {
             self.progress = progress
+            // Near its end, the page has most likely painted.
+            if progress >= 0.9, paintWait != nil, !waitsOutPaint { showPage() }
             delegate?.tabProgressChanged(self)
         }
     }
@@ -406,6 +422,8 @@ final class Tab {
 
     nonisolated private func faviconChanged(_ png: Data) {
         MainActor.assumeIsolated {
+            // Pages send the same icon again, as on each navigation.
+            guard png != (faviconPNG ?? Data()) else { return }
             showFavicon(png)
             delegate?.tabDidChange(self)
         }
@@ -468,5 +486,17 @@ final class BrowserHostView: NSView {
 
     override func resizeSubviews(withOldSize oldSize: NSSize) {
         for view in subviews { view.frame = bounds }
+    }
+
+    // A cover or start page fading out, at alpha 0 already, lets clicks
+    // through to the page it is uncovering.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden else { return nil }
+        let local = convert(point, from: superview)
+        guard bounds.contains(local) else { return nil }
+        for view in subviews.reversed() where view.alphaValue > 0 {
+            if let hit = view.hitTest(local) { return hit }
+        }
+        return self
     }
 }

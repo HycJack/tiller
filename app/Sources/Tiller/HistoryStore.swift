@@ -39,6 +39,11 @@ final class HistoryStore: @unchecked Sendable {
     /// Counts writes, so a reader can tell whether anything changed since it last looked.
     private let writes = OSAllocatedUnfairLock(initialState: 0)
 
+    /// The favicon last written or read for each host. Every new tab of a
+    /// site hands over the same PNG, which then needn't be written again,
+    /// nor redraw the start page's tiles.
+    private let knownIcons = OSAllocatedUnfairLock(initialState: [String: Data]())
+
     /// Goes up with every write. Equal values mean the history is as it was.
     var version: Int { writes.withLock { $0 } }
 
@@ -86,6 +91,15 @@ final class HistoryStore: @unchecked Sendable {
     /// Keeps a site's favicon for the start page. One icon per host.
     func setIcon(_ png: Data, for url: String) {
         guard let host = Self.host(of: url) else { return }
+        let changed = knownIcons.withLock { known in
+            guard known[host] != png else { return false }
+            // A long session's worth of hosts is a few hundred small PNGs;
+            // past that, start over rather than keep them all.
+            if known.count >= 500 { known.removeAll() }
+            known[host] = png
+            return true
+        }
+        guard changed else { return }
         write("INSERT OR REPLACE INTO icons (host, png) VALUES (?, ?)", [host, png])
     }
 
@@ -93,14 +107,34 @@ final class HistoryStore: @unchecked Sendable {
     /// the store's queue.
     func icon(for url: String, completion: @escaping @Sendable (Data?) -> Void) {
         guard let host = Self.host(of: url) else { return completion(nil) }
-        queue.async { [db] in
-            completion((try? db?.query("SELECT png FROM icons WHERE host = ?", [host]) { $0.data(0) })?.first)
+        queue.async { [db, knownIcons] in
+            let png = (try? db?.query("SELECT png FROM icons WHERE host = ?", [host]) { $0.data(0) })?.first
+            if let png { knownIcons.withLock { $0[host] = png } }
+            completion(png)
         }
     }
 
+    /// Deletes every page and icon, and then rewrites the file without them,
+    /// as deleted rows otherwise stay readable in the WAL and in free pages.
     func clear() {
-        write("DELETE FROM pages", [])
-        write("DELETE FROM icons", [])
+        writes.withLock { $0 += 1 }
+        knownIcons.withLock { $0.removeAll() }
+        queue.async { [db, knownIcons] in
+            guard let db else { return }
+            // Icons read before the delete ran on the queue are gone too.
+            knownIcons.withLock { $0.removeAll() }
+            do {
+                try db.execute("PRAGMA secure_delete = ON")
+                defer { try? db.execute("PRAGMA secure_delete = OFF") }
+                try db.transaction {
+                    try db.run("DELETE FROM pages")
+                    try db.run("DELETE FROM icons")
+                }
+                try db.execute("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
+            } catch {
+                NSLog("Tiller: clearing history failed: \(error)")
+            }
+        }
     }
 
     /// The most visited sites, by their pages' visits added up, each with
@@ -246,7 +280,9 @@ final class HistoryStore: @unchecked Sendable {
     private static func icons(for hosts: [String], in db: SQLiteDatabase?) -> [String: Data] {
         guard !hosts.isEmpty else { return [:] }
         let marks = Array(repeating: "?", count: hosts.count).joined(separator: ",")
-        let rows = (try? db?.query("SELECT host, png FROM icons WHERE host IN (\(marks))", hosts) { ($0.string(0), $0.data(1)) }) ?? []
+        let rows = (try? db?.query("SELECT host, png FROM icons WHERE host IN (\(marks))", hosts, cache: false) {
+            ($0.string(0), $0.data(1))
+        }) ?? []
         return Dictionary(rows, uniquingKeysWith: { first, _ in first })
     }
 

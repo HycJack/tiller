@@ -28,7 +28,13 @@ final class StartPageView: NSView {
     private static let limit = 8
     private static let closedLimit = 5
     /// The tiles' width, which the list under them matches.
-    private static let width = CGFloat(columns) * SiteTile.width + CGFloat(columns - 1) * 4
+    private static let width = width(columns: columns)
+    /// The fewest columns the content narrows to, which the heading needs.
+    private static let minColumns = 2
+
+    private static func width(columns: Int) -> CGFloat {
+        CGFloat(columns) * SiteTile.width + CGFloat(columns - 1) * 4
+    }
     /// A little above center reads as centered.
     private static let lift: CGFloat = 40
     /// Centers the content, lifted by up to `lift` while there is room.
@@ -36,6 +42,10 @@ final class StartPageView: NSView {
     /// Whether the closed tabs fit under the tiles. A short window leaves
     /// them out rather than cutting the page off at top and bottom.
     private var closedFits = true
+    /// The column is as wide as the tiles in a row, so two or three sit
+    /// centered on the page rather than at the left of an empty row. Under
+    /// the closed tabs' list it keeps the list's width.
+    private lazy var contentWidth = content.widthAnchor.constraint(equalToConstant: Self.width)
 
     private let profile: ProfileContext
 
@@ -85,10 +95,7 @@ final class StartPageView: NSView {
         content.addArrangedSubview(closedList)
         content.setCustomSpacing(30, after: grid)
         closedList.widthAnchor.constraint(equalToConstant: Self.width).isActive = true
-        // The column keeps the four tiles' width however many there are, so
-        // the heading lines up over the first tile rather than the column
-        // shrinking to the heading and leaving a lone tile off center.
-        content.widthAnchor.constraint(equalToConstant: Self.width).isActive = true
+        contentWidth.isActive = true
 
         for view in [content, emptyHint] {
             view.translatesAutoresizingMaskIntoConstraints = false
@@ -175,6 +182,9 @@ final class StartPageView: NSView {
         let hidden = shownClosed.isEmpty || !closedFits
         closedHeading.superview?.isHidden = hidden
         closedList.isHidden = hidden
+        let columns = hidden ? max(Self.minColumns, min(Self.columns, shownSites.count)) : Self.columns
+        let width = Self.width(columns: columns)
+        if contentWidth.constant != width { contentWidth.constant = width }
     }
 
     /// A section's height: its heading, the space under it, and `body`.
@@ -209,6 +219,7 @@ final class StartPageView: NSView {
     /// The sites shown now, so the same ones again leave the tiles alone.
     private var shownSites: [FrequentSite] = []
     private var shownClosed: [SessionStore.SavedTab] = []
+    private var tiles: [SiteTile] = []
 
     private func show(_ sites: [FrequentSite], closed: [SessionStore.SavedTab]) {
         content.isHidden = sites.isEmpty && closed.isEmpty
@@ -227,14 +238,27 @@ final class StartPageView: NSView {
         }
         updateClosedVisibility()
         guard sites != shownSites else { return }
+        let hadTiles = !shownSites.isEmpty
+        let sameHosts = sites.map(\.host) == shownSites.map(\.host)
         shownSites = sites
+        updateClosedVisibility()
+        // A new title or icon for a site shown, as most history writes are,
+        // changes its tile rather than building and fading in every tile again.
+        if sameHosts {
+            zip(tiles, sites).forEach { $0.show($1) }
+            return
+        }
         // Removing a row leaves its views in the grid, where the old tiles
         // would show through the new ones, so they are taken out too.
         let old = grid.subviews
         while grid.numberOfRows > 0 { grid.removeRow(at: 0) }
         old.forEach { $0.removeFromSuperview() }
-        let tiles = sites.map { site in
-            SiteTile(site: site) { [weak self] disposition in self?.onOpen?(site.url, disposition) }
+        tiles = sites.map { site in
+            // The site's page as shown now, which an update in place may change.
+            SiteTile(site: site) { [weak self] disposition in
+                guard let self, let url = self.shownSites.first(where: { $0.host == site.host })?.url else { return }
+                self.onOpen?(url, disposition)
+            }
         }
         for start in stride(from: 0, to: tiles.count, by: Self.columns) {
             let row = Array(tiles[start..<min(start + Self.columns, tiles.count)])
@@ -246,8 +270,9 @@ final class StartPageView: NSView {
         for index in 0..<grid.numberOfColumns { grid.column(at: index).width = SiteTile.width }
         tilesHeight = sites.isEmpty ? 0 : sectionHeight(heading, grid)
         needsLayout = true
-        // Tiles arrive a moment after the page, so they fade in rather than pop.
-        guard window != nil, !Theme.reduceMotion else { return }
+        // Tiles arrive a moment after the page, so they fade in rather than
+        // pop. Tiles that replace others just show.
+        guard !hadTiles, window != nil, !Theme.reduceMotion else { return }
         grid.alphaValue = 0
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Theme.Duration.panel
@@ -345,26 +370,15 @@ private final class SiteTile: ClickableView {
 
     private let well = NSView()
     private let tint: NSColor
+    private var glyph: NSView?
+    /// The PNG the glyph shows, so an update with the same one keeps it.
+    private var icon: Data?
 
     init(site: FrequentSite, action: @escaping (OpenDisposition) -> Void) {
         tint = Self.color(for: site.host)
         super.init(action: action)
         well.wantsLayer = true
 
-        let glyph: NSView
-        if let data = site.icon, let image = NSImage(data: data) {
-            let view = FaviconView()
-            view.image = image
-            view.imageScaling = .scaleProportionallyUpOrDown
-            view.widthAnchor.constraint(equalToConstant: 32).isActive = true
-            view.heightAnchor.constraint(equalToConstant: 32).isActive = true
-            glyph = view
-        } else {
-            let letter = NSTextField(labelWithString: site.host.first.map { String($0).uppercased() } ?? "?")
-            letter.font = .systemFont(ofSize: 26, weight: .semibold).rounded
-            letter.textColor = tint
-            glyph = letter
-        }
         let name = NSTextField(labelWithString: site.host)
         name.font = .systemFont(ofSize: Theme.FontSize.secondary)
         name.textColor = .secondaryLabelColor
@@ -373,11 +387,10 @@ private final class SiteTile: ClickableView {
         // A host a little too long for the tile draws tighter before it is cut.
         name.allowsDefaultTighteningForTruncation = true
 
-        for view in [well, glyph, name] {
+        for view in [well, name] {
             view.translatesAutoresizingMaskIntoConstraints = false
         }
         addSubview(well)
-        well.addSubview(glyph)
         addSubview(name)
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: Self.width),
@@ -385,18 +398,53 @@ private final class SiteTile: ClickableView {
             well.centerXAnchor.constraint(equalTo: centerXAnchor),
             well.widthAnchor.constraint(equalToConstant: Self.wellSide),
             well.heightAnchor.constraint(equalToConstant: Self.wellSide),
-            glyph.centerXAnchor.constraint(equalTo: well.centerXAnchor),
-            glyph.centerYAnchor.constraint(equalTo: well.centerYAnchor),
             name.topAnchor.constraint(equalTo: well.bottomAnchor, constant: 8),
             name.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             name.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             name.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        toolTip = site.title.isEmpty ? site.url : "\(site.title)\n\(site.url)"
         setAccessibilityLabel(site.host)
+        show(site)
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Shows `site`'s icon and page. Its host stays the tile's.
+    func show(_ site: FrequentSite) {
+        toolTip = site.title.isEmpty ? site.url : "\(site.title)\n\(site.url)"
+        guard glyph == nil || site.icon != icon else { return }
+        icon = site.icon
+        glyph?.removeFromSuperview()
+        let glyph: NSView
+        if let data = site.icon, let image = NSImage(data: data) {
+            let view = FaviconView()
+            view.image = image
+            view.imageScaling = .scaleProportionallyUpOrDown
+            let side = Self.iconSide(image)
+            view.widthAnchor.constraint(equalToConstant: side).isActive = true
+            view.heightAnchor.constraint(equalToConstant: side).isActive = true
+            glyph = view
+        } else {
+            let letter = NSTextField(labelWithString: site.host.first.map { String($0).uppercased() } ?? "?")
+            letter.font = .systemFont(ofSize: 26, weight: .semibold).rounded
+            letter.textColor = tint
+            glyph = letter
+        }
+        glyph.translatesAutoresizingMaskIntoConstraints = false
+        well.addSubview(glyph)
+        NSLayoutConstraint.activate([
+            glyph.centerXAnchor.constraint(equalTo: well.centerXAnchor),
+            glyph.centerYAnchor.constraint(equalTo: well.centerYAnchor),
+        ])
+        self.glyph = glyph
+    }
+
+    /// 32 points, so the tiles' icons read as one size, except for a
+    /// favicon of under 32 pixels, which would blur stretched that far.
+    private static func iconSide(_ image: NSImage) -> CGFloat {
+        let pixels = image.representations.map(\.pixelsWide).max() ?? 0
+        return pixels > 0 && pixels < 32 ? 24 : 32
+    }
 
     /// A stable, soft color per site for letter tiles. Darker in light mode,
     /// where a bright yellow or green letter would barely show on the page.
@@ -512,8 +560,21 @@ private final class GrainView: NSView {
     private static let whiteTile = tile(white: true)
     private static let blackTile = tile(white: false)
 
+    /// The tile in 1x and 2x pixels for its 96 points, so a Retina screen
+    /// gets grain at its own resolution rather than doubled.
     private static func tile(white: Bool) -> NSImage {
         let side = 96
+        let image = NSImage(size: NSSize(width: side, height: side))
+        for scale in [1, 2] {
+            guard let pixels = grain(side: side * scale, white: white) else { continue }
+            let rep = NSBitmapImageRep(cgImage: pixels)
+            rep.size = image.size
+            image.addRepresentation(rep)
+        }
+        return image
+    }
+
+    private static func grain(side: Int, white: Bool) -> CGImage? {
         var pixels = [UInt8](repeating: 0, count: side * side * 4)
         var state: UInt32 = 0x9E37_79B9
         for index in 0..<(side * side) {
@@ -527,10 +588,11 @@ private final class GrainView: NSView {
             for channel in 0..<3 { pixels[index * 4 + channel] = white ? alpha : 0 }
             pixels[index * 4 + 3] = alpha
         }
-        guard let context = CGContext(
-            data: &pixels, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ), let image = context.makeImage() else { return NSImage() }
-        return NSImage(cgImage: image, size: NSSize(width: side, height: side))
+        return pixels.withUnsafeMutableBytes { bytes in
+            CGContext(
+                data: bytes.baseAddress, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )?.makeImage()
+        }
     }
 }

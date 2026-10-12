@@ -9,6 +9,9 @@ struct SQLiteError: Error, CustomStringConvertible {
 /// database from one queue at a time, which is why it can be handed to one.
 final class SQLiteDatabase: @unchecked Sendable {
     private var handle: OpaquePointer?
+    /// Prepared statements by their SQL, kept for the database's lifetime,
+    /// as the same few statements run for every page visited.
+    private var statements: [String: OpaquePointer] = [:]
 
     init(path: String, readOnly: Bool = false) throws {
         let flags = readOnly ? SQLITE_OPEN_READONLY : (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE)
@@ -20,7 +23,10 @@ final class SQLiteDatabase: @unchecked Sendable {
         sqlite3_busy_timeout(handle, 2000)
     }
 
-    deinit { sqlite3_close(handle) }
+    deinit {
+        statements.values.forEach { sqlite3_finalize($0) }
+        sqlite3_close(handle)
+    }
 
     /// Runs one or more statements that take no parameters.
     func execute(_ sql: String) throws {
@@ -29,7 +35,7 @@ final class SQLiteDatabase: @unchecked Sendable {
 
     /// Runs one statement, binding `values` to its `?` placeholders in order.
     func run(_ sql: String, _ values: [Any?] = []) throws {
-        try withStatement(sql, values) { statement in
+        try withStatement(sql, values, cache: true) { statement in
             let result = sqlite3_step(statement)
             guard result == SQLITE_DONE || result == SQLITE_ROW else { throw error() }
         }
@@ -38,7 +44,7 @@ final class SQLiteDatabase: @unchecked Sendable {
     /// Runs one statement once for each of `rows`, binding its values in
     /// order. The statement is prepared once, which counts for thousands.
     func runEach(_ sql: String, _ rows: [[Any?]]) throws {
-        try withStatement(sql, []) { statement in
+        try withStatement(sql, [], cache: true) { statement in
             for values in rows {
                 sqlite3_reset(statement)
                 sqlite3_clear_bindings(statement)
@@ -49,9 +55,11 @@ final class SQLiteDatabase: @unchecked Sendable {
         }
     }
 
-    /// Runs a query and maps each row.
-    func query<T>(_ sql: String, _ values: [Any?] = [], row: (Row) throws -> T) throws -> [T] {
-        try withStatement(sql, values) { statement in
+    /// Runs a query and maps each row. SQL that is built per call, such as
+    /// an `IN` list as long as its values, passes `cache: false`, so it
+    /// isn't kept once per length.
+    func query<T>(_ sql: String, _ values: [Any?] = [], cache: Bool = true, row: (Row) throws -> T) throws -> [T] {
+        try withStatement(sql, values, cache: cache) { statement in
             var rows: [T] = []
             while true {
                 let result = sqlite3_step(statement)
@@ -76,10 +84,33 @@ final class SQLiteDatabase: @unchecked Sendable {
         }
     }
 
-    private func withStatement<T>(_ sql: String, _ values: [Any?], _ body: (OpaquePointer) throws -> T) throws -> T {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw error() }
-        defer { sqlite3_finalize(statement) }
+    private func withStatement<T>(
+        _ sql: String, _ values: [Any?], cache: Bool, _ body: (OpaquePointer) throws -> T
+    ) throws -> T {
+        let statement: OpaquePointer
+        if cache, let cached = statements[sql] {
+            statement = cached
+        } else {
+            var prepared: OpaquePointer?
+            let flags = cache ? UInt32(SQLITE_PREPARE_PERSISTENT) : 0
+            guard sqlite3_prepare_v3(handle, sql, -1, flags, &prepared, nil) == SQLITE_OK, let prepared else {
+                sqlite3_finalize(prepared)
+                throw error()
+            }
+            statement = prepared
+            if cache { statements[sql] = prepared }
+        }
+        // Reset when done rather than when next used, so a statement left
+        // halfway by a throw doesn't hold a read open, which would keep a
+        // checkpoint or VACUUM from running, nor keep its bound blobs.
+        defer {
+            if cache {
+                sqlite3_reset(statement)
+                sqlite3_clear_bindings(statement)
+            } else {
+                sqlite3_finalize(statement)
+            }
+        }
         try bind(values, to: statement)
         return try body(statement)
     }
