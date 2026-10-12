@@ -203,24 +203,44 @@ final class HistoryStore: @unchecked Sendable {
     /// merged, on the store's queue.
     func importPages(_ pages: [HistoryPage], completion: @escaping @Sendable (Result<Int, Error>) -> Void) {
         writes.withLock { $0 += 1 }
-        queue.async { [db] in
+        // In chunks, each its own transaction, and each queuing the next
+        // when it is done, so the address bar's searches and the start
+        // page's tiles asked for meanwhile run between them rather than wait
+        // out an import of a long history.
+        let chunks = stride(from: 0, to: pages.count, by: Self.importChunk).map {
+            Array(pages[$0..<min($0 + Self.importChunk, pages.count)])
+        }
+        importChunks(chunks[...], total: pages.count, completion: completion)
+    }
+
+    private func importChunks(
+        _ chunks: ArraySlice<[HistoryPage]>, total: Int, completion: @escaping @Sendable (Result<Int, Error>) -> Void
+    ) {
+        guard let chunk = chunks.first else { return completion(.success(total)) }
+        queue.async { [weak self, db, writes] in
             guard let db else { return completion(.failure(SQLiteError(description: "history database unavailable"))) }
-            completion(Result {
+            do {
                 try db.transaction {
-                    for page in pages {
-                        try db.run("""
-                            INSERT INTO pages (url, title, visit_count, last_visit) VALUES (?, ?, ?, ?)
-                            ON CONFLICT (url) DO UPDATE SET
-                                visit_count = max(visit_count, excluded.visit_count),
-                                last_visit = max(last_visit, excluded.last_visit),
-                                title = CASE WHEN title = '' THEN excluded.title ELSE title END
-                            """, [page.url, page.title, page.visitCount, page.lastVisit.timeIntervalSince1970])
-                    }
-                    return pages.count
+                    try db.runEach("""
+                        INSERT INTO pages (url, title, visit_count, last_visit) VALUES (?, ?, ?, ?)
+                        ON CONFLICT (url) DO UPDATE SET
+                            visit_count = max(visit_count, excluded.visit_count),
+                            last_visit = max(last_visit, excluded.last_visit),
+                            title = CASE WHEN title = '' THEN excluded.title ELSE title END
+                        """, chunk.map { [$0.url, $0.title, $0.visitCount, $0.lastVisit.timeIntervalSince1970] })
                 }
-            })
+            } catch {
+                // The chunks after it are dropped. Those before are kept,
+                // which an import run again merges with.
+                return completion(.failure(error))
+            }
+            writes.withLock { $0 += 1 }
+            guard let self else { return completion(.success(total)) }
+            self.importChunks(chunks.dropFirst(), total: total, completion: completion)
         }
     }
+
+    private static let importChunk = 2000
 
     /// The saved favicons of `hosts`, in one query.
     private static func icons(for hosts: [String], in db: SQLiteDatabase?) -> [String: Data] {

@@ -104,7 +104,10 @@ final class AddressBarView: NSView {
             field.trailingAnchor.constraint(equalTo: buttons.leadingAnchor, constant: -4),
             buttons.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
             buttons.centerYAnchor.constraint(equalTo: content.centerYAnchor),
-            keyButton.widthAnchor.constraint(equalToConstant: 20),
+            // Plates the size of the find bar's buttons in the same capsule.
+            keyButton.widthAnchor.constraint(equalToConstant: Theme.ButtonSize.inline),
+            keyButton.heightAnchor.constraint(equalToConstant: Theme.ButtonSize.inline),
+            zoomButton.heightAnchor.constraint(equalToConstant: Theme.ButtonSize.inline),
         ])
         content.onResize = { [weak self] in self?.resizeProgress() }
         field.onEditingChanged = { [weak self, weak content] editing in

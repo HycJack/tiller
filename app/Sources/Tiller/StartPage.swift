@@ -240,6 +240,10 @@ final class StartPageView: NSView {
             let row = Array(tiles[start..<min(start + Self.columns, tiles.count)])
             grid.addRow(with: row + Array(repeating: NSGridCell.emptyContentView, count: Self.columns - row.count))
         }
+        // Every column keeps a tile's width, so a short row fills from the
+        // left. Left to the grid, empty columns can take the room a tile
+        // would and push the last tile to the far edge.
+        for index in 0..<grid.numberOfColumns { grid.column(at: index).width = SiteTile.width }
         tilesHeight = sites.isEmpty ? 0 : sectionHeight(heading, grid)
         needsLayout = true
         // Tiles arrive a moment after the page, so they fade in rather than pop.

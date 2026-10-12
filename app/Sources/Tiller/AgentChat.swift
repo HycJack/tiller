@@ -20,7 +20,13 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     /// The message being written.
     var input: NSView { composer.textView }
     var isEmpty: Bool { conversation == nil }
-    var isBusy: Bool { session?.isBusy == true }
+    var isBusy: Bool { lookingUpAgent || session?.isBusy == true }
+    /// Set while the agent's CLI is looked up in the background before the
+    /// first message goes, which counts as working.
+    private var lookingUpAgent = false
+    /// Bumped by every lookup and by stopping one, so a lookup stopped and
+    /// followed by another can't send its message when it returns.
+    private var agentLookup = 0
     /// A new chat uses the agent picked for new chats until its first
     /// message, unless it was made for another.
     var choice: AgentChoice { conversation?.choice ?? presetKind ?? profile.providers.current }
@@ -43,9 +49,10 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     private let transcript = TranscriptView()
     private let scrollView = NSScrollView()
     /// Fades the transcript out under the header and above the tab bar, so a
-    /// line is never sliced at either edge.
-    private let topFade = EdgeFadeView(edge: .top)
-    private let bottomFade = EdgeFadeView(edge: .bottom)
+    /// line is never sliced at either edge. A mask rather than a strip of the
+    /// background over the text, since what shows behind the panel is the
+    /// window's glass or tint, which no one color matches.
+    private let edgeFade = EdgeFadeMask()
     /// Room above the first message and below the last, inside the scroll
     /// view, so neither sits on the fades.
     private static let insets = NSEdgeInsets(top: 8, left: 0, bottom: 10, right: 0)
@@ -78,6 +85,9 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     /// re-render the whole block for every few characters.
     private var liveTextRenderPending = false
     private static let liveTextInterval = 0.05
+    /// Streamed text that came while the chat was hidden, in a background
+    /// tab or a closed panel. It is drawn once, when the chat shows again.
+    private var liveTextStale = false
     /// Running tool calls: their rows and where they are in `records`.
     private var toolRows: [String: (row: ToolRowView, record: Int)] = [:]
     private let quickLook = QuickLookItems()
@@ -242,6 +252,8 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     }
 
     private func endSession() {
+        lookingUpAgent = false
+        agentLookup += 1
         session?.stop()
         session = nil
         resuming = false
@@ -294,7 +306,10 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         queueView.onRemove = { [weak self] index in self?.removeQueued(at: index) }
         queueView.onSendNow = { [weak self] in self?.submit() }
 
-        for view in [scrollView, topFade, bottomFade, separator, emptyState, scrollDownButton, queueView, tabBarHost, composer, skillCompletion.picker] as [NSView] {
+        scrollView.wantsLayer = true
+        scrollView.layer?.mask = edgeFade
+
+        for view in [scrollView, separator, emptyState, scrollDownButton, queueView, tabBarHost, composer, skillCompletion.picker] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -317,15 +332,6 @@ final class AgentChatView: NSView, NSTextViewDelegate {
             transcript.trailingAnchor.constraint(equalTo: clip.trailingAnchor),
             // Less the insets, so a short transcript doesn't scroll.
             transcript.heightAnchor.constraint(greaterThanOrEqualTo: clip.heightAnchor, constant: -(Self.insets.top + Self.insets.bottom)),
-
-            topFade.topAnchor.constraint(equalTo: scrollView.topAnchor),
-            topFade.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
-            topFade.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
-            topFade.heightAnchor.constraint(equalToConstant: EdgeFadeView.height),
-            bottomFade.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
-            bottomFade.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
-            bottomFade.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
-            bottomFade.heightAnchor.constraint(equalToConstant: EdgeFadeView.height),
 
             emptyState.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor, constant: -10),
             emptyState.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
@@ -355,6 +361,7 @@ final class AgentChatView: NSView, NSTextViewDelegate {
 
     override func layout() {
         super.layout()
+        edgeFade.fit(scrollView.bounds)
         guard bounds.height > 0, !isHiddenOrHasHiddenAncestor else { return }
         loadIfNeeded()
         guard pendingScrollToBottom else { return }
@@ -365,7 +372,8 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     /// Shown for the first time, or the panel came back: draw the saved chat.
     override func viewDidUnhide() {
         super.viewDidUnhide()
-        if !recordsLoaded { needsLayout = true }
+        if !recordsLoaded || pendingScrollToBottom { needsLayout = true }
+        if liveTextStale { scheduleLiveTextRender() }
     }
 
     /// The scroll view resets its own style on the same notification, so this
@@ -460,6 +468,18 @@ final class AgentChatView: NSView, NSTextViewDelegate {
 
     private func stopTurn() {
         guard isBusy else { return }
+        if lookingUpAgent {
+            // Nothing has started yet, so there is nothing to interrupt; the
+            // turn ends here as a stopped one does.
+            lookingUpAgent = false
+            agentLookup += 1
+            transcript.hideThinking()
+            setBusy(false)
+            showIdle()
+            finishRun(.stopped)
+            turnEnded(finished: false)
+            return
+        }
         session?.interrupt()
         // Antigravity CLI and Grok Build have already stopped.
         if isBusy { setStatus("Stopping…", busy: true) }
@@ -621,13 +641,36 @@ final class AgentChatView: NSView, NSTextViewDelegate {
             self?.preview(urls, at: index)
         })
         lastSent = (text, images)
+        let skill = text.hasPrefix("/") ? SkillCompletion.skill(calledBy: text, in: availableSkills) : nil
+        let pageContext = contextOverride ?? context?() ?? ""
+        guard !session.isRunning, AgentEnvironment.needsShellLookup(session.kind, settings: profile.settings) else {
+            return start(session, text: text, images: images, context: pageContext, skill: skill)
+        }
+        // Finding the CLI takes a login shell, which runs in the background,
+        // so the window stays responsive meanwhile. The chat shows it is
+        // working, which also holds further messages in the queue.
+        lookingUpAgent = true
+        agentLookup += 1
+        let lookup = agentLookup
+        setBusy(true)
+        transcript.showThinking()
+        scrollToBottom()
+        let kind = session.kind
+        Task { [weak self] in
+            _ = await Task.detached(priority: .userInitiated) { AgentEnvironment.detectedExecutable(for: kind) }.value
+            // Unless the chat was stopped or closed meanwhile.
+            guard let self, self.lookingUpAgent, self.agentLookup == lookup, self.session === session else { return }
+            self.lookingUpAgent = false
+            self.start(session, text: text, images: images, context: pageContext, skill: skill)
+        }
+    }
+
+    /// Hands the message to the agent, starting its CLI if need be.
+    private func start(_ session: AgentSession, text: String, images: [AgentAttachment], context: String, skill: AgentSkill?) {
         do {
-            try session.send(
-                text, images: images, context: contextOverride ?? context?() ?? "",
-                // Only a message starting with / can call a skill, so the
-                // skill folders are read only then.
-                skill: text.hasPrefix("/") ? SkillCompletion.skill(calledBy: text, in: availableSkills) : nil
-            )
+            // Only a message starting with / can call a skill, so the skill
+            // folders are read only then.
+            try session.send(text, images: images, context: context, skill: skill)
             if session.isRunning { setStatus("Working…", busy: true) }
             setBusy(true)
             transcript.showThinking()
@@ -952,6 +995,7 @@ final class AgentChatView: NSView, NSTextViewDelegate {
             saveRecords()
         }
         liveText = nil
+        liveTextStale = false
     }
 
     /// Gives the turn's last text Copy and its time.
@@ -997,6 +1041,12 @@ final class AgentChatView: NSView, NSTextViewDelegate {
                 guard let self else { return }
                 self.liveTextRenderPending = false
                 guard let liveText = self.liveText else { return }
+                // Hidden, nothing is drawn, so the text waits until it shows.
+                guard !self.isHiddenOrHasHiddenAncestor else {
+                    self.liveTextStale = true
+                    return
+                }
+                self.liveTextStale = false
                 let follow = self.transcript.isNearBottom(of: self.scrollView)
                 liveText.text = self.liveTextBuffer
                 if follow { self.scrollToBottom() } else { self.updateScrollDownButtonAfterLayout() }
@@ -1121,6 +1171,11 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     /// Keeps the newest message in view. Agent events call this only when the
     /// user hasn't scrolled up to read something.
     func scrollToBottom() {
+        // Hidden, a layout here is wasted; `layout` scrolls once it shows.
+        guard !isHiddenOrHasHiddenAncestor else {
+            pendingScrollToBottom = true
+            return
+        }
         layoutSubtreeIfNeeded()
         let clip = scrollView.contentView
         clip.scroll(to: NSPoint(x: 0, y: bottomOffset))
@@ -1135,39 +1190,34 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     }
 }
 
-/// A strip over one edge of the transcript that fades from the panel's
-/// background to clear. It only draws: clicks and scrolls pass through.
-final class EdgeFadeView: NSView {
-    enum Edge { case top, bottom }
-    static let height: CGFloat = 10
-    private let edge: Edge
+/// The transcript's mask: opaque, except for a short ramp to clear at the
+/// top and bottom edges. The ramps fall within the scroll view's insets and
+/// the transcript's own padding, so text at rest is never faded, only text
+/// scrolled past an edge.
+final class EdgeFadeMask: CAGradientLayer {
+    static let height: CGFloat = 16
 
-    init(edge: Edge) {
-        self.edge = edge
-        super.init(frame: .zero)
-        wantsLayer = true
+    override init() {
+        super.init()
+        colors = [CGColor.clear, CGColor.black, CGColor.black, CGColor.clear]
+        // Layer y runs up, so the first stop is the bottom edge.
+        startPoint = CGPoint(x: 0.5, y: 0)
+        endPoint = CGPoint(x: 0.5, y: 1)
     }
+
+    override init(layer: Any) { super.init(layer: layer) }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    override func makeBackingLayer() -> CALayer { CAGradientLayer() }
-
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    override var wantsUpdateLayer: Bool { true }
-
-    /// The panel draws nothing of its own, so it shows the window's
-    /// background. Resolved here, where the view's appearance is current, so
-    /// it follows light and dark mode.
-    override func updateLayer() {
-        guard let gradient = layer as? CAGradientLayer else { return }
-        // Opaque at the edge, clear toward the transcript. Layer y runs up.
-        gradient.startPoint = CGPoint(x: 0.5, y: edge == .top ? 1 : 0)
-        gradient.endPoint = CGPoint(x: 0.5, y: edge == .top ? 0 : 1)
-        gradient.colors = [
-            NSColor.windowBackgroundColor.layerColor,
-            NSColor.windowBackgroundColor.dynamic(alpha: 0).layerColor,
-        ]
+    /// Spans `bounds`, the scroll view's, with ramps of `height` points.
+    func fit(_ bounds: NSRect) {
+        guard bounds.height > 0, frame != bounds else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        frame = bounds
+        let ramp = min(0.5, Self.height / bounds.height) as NSNumber
+        locations = [0, ramp, NSNumber(value: 1 - ramp.doubleValue), 1]
+        CATransaction.commit()
     }
 }
 

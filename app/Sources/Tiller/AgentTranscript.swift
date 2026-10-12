@@ -778,8 +778,23 @@ final class ToolGroupView: NSView, TranscriptRow {
             rows.alphaValue = 0
             rows.isHidden = false
             withEasing(Theme.Duration.quick) { rows.animator().alphaValue = 1 }
+        } else if hideRows && !rows.isHidden && window != nil && !Theme.reduceMotion {
+            // And fade out before they fold, as when a turn ends.
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Theme.Duration.quick
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                rows.animator().alphaValue = 0
+            } completionHandler: { [weak self] in
+                MainActor.assumeIsolated {
+                    // Unless they were opened again meanwhile.
+                    guard let self, !self.header.isExpanded else { return }
+                    self.rows.isHidden = true
+                    self.rows.alphaValue = 1
+                }
+            }
         } else {
             rows.isHidden = hideRows
+            rows.alphaValue = 1
         }
         var names: [String] = []
         for call in calls {
@@ -845,12 +860,29 @@ final class ThinkingRowView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// The phrase changes only while the row is on screen.
+    /// The phrase changes only while the row is on screen: in a window, and
+    /// not in a hidden chat or panel, which a turn can run on in.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        updateTimer()
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        updateTimer()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        updateTimer()
+    }
+
+    private func updateTimer() {
+        let visible = window != nil && !isHiddenOrHasHiddenAncestor
+        guard visible != (timer != nil) else { return }
         timer?.invalidate()
         timer = nil
-        guard window != nil else { return }
+        guard visible else { return }
         timer = Timer.scheduledTimer(withTimeInterval: Self.phraseInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.nextPhrase() }
         }
@@ -924,9 +956,19 @@ private final class BoatView: NSView {
         startAnimating()
     }
 
+    override func viewDidHide() {
+        super.viewDidHide()
+        boat.removeAllAnimations()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        startAnimating()
+    }
+
     private func startAnimating() {
         boat.removeAllAnimations()
-        guard window != nil, !Theme.reduceMotion else { return }
+        guard window != nil, !isHiddenOrHasHiddenAncestor, !Theme.reduceMotion else { return }
         let bob = CABasicAnimation(keyPath: "position.y")
         bob.fromValue = boat.position.y - 0.75
         bob.toValue = boat.position.y + 0.75
@@ -2125,7 +2167,7 @@ final class MarkdownCodeView: NSView, TranscriptRow {
 
 /// A button that says when it gains or loses keyboard focus, for one that
 /// hides until it is wanted.
-private class FocusReportingButton: NSButton {
+private class FocusReportingButton: HoverButton {
     var onFocusChange: ((Bool) -> Void)?
 
     override func becomeFirstResponder() -> Bool {

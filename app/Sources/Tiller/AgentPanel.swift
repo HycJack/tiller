@@ -581,6 +581,7 @@ final class AgentEmptyState: NSView {
         let changed = kind != self.kind
         self.kind = kind
         title.stringValue = "Ask \(name)"
+        title.toolTip = title.stringValue
         if changed { badge.logo = kind.logo(size: 28) }
     }
 
@@ -599,6 +600,10 @@ final class AgentEmptyState: NSView {
         super.init(frame: frame)
         title.font = .systemFont(ofSize: Theme.FontSize.title, weight: .semibold)
         title.alignment = .center
+        // A long agent or provider name ends in an ellipsis in a narrow panel
+        // rather than being cut mid-letter.
+        title.lineBreakMode = .byTruncatingTail
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         subtitle.font = .systemFont(ofSize: Theme.FontSize.secondary)
         subtitle.textColor = .secondaryLabelColor
@@ -1004,7 +1009,8 @@ final class QueuedMessagesView: NSView {
         sendNowButton.action = #selector(sendNow(_:))
         header.orientation = .horizontal
         header.spacing = 6
-        header.edgeInsets = NSEdgeInsets(top: 0, left: 4, bottom: 0, right: 0)
+        // The header's text starts where the rows' text does.
+        header.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 0)
         header.setViews([headerLabel, sendNowButton], in: .leading)
 
         NSLayoutConstraint.activate([
@@ -1046,6 +1052,9 @@ private final class QueuedMessageRow: NSView {
     private let closeButton = HoverButton()
     private var isHovered = false {
         didSet { if isHovered != oldValue { needsDisplay = true } }
+    }
+    private var isPressed = false {
+        didSet { if isPressed != oldValue { needsDisplay = true } }
     }
 
     init(text: String, images: Int) {
@@ -1107,7 +1116,8 @@ private final class QueuedMessageRow: NSView {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        layer?.backgroundColor = Theme.fill(isHovered ? Theme.Fill.hover : Theme.Fill.rest).layerColor
+        let alpha = isPressed ? Theme.Fill.pressed : isHovered ? Theme.Fill.hover : Theme.Fill.rest
+        withEasing(Theme.Duration.quick) { layer?.backgroundColor = Theme.fill(alpha).layerColor }
         layer?.borderWidth = Theme.hairlineWidth
         layer?.borderColor = Theme.hairline.layerColor
     }
@@ -1119,10 +1129,20 @@ private final class QueuedMessageRow: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) { isHovered = true }
-    override func mouseExited(with event: NSEvent) { isHovered = false }
-    override func mouseDown(with event: NSEvent) {}
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        isPressed = false
+    }
+
+    override func mouseDown(with event: NSEvent) { isPressed = true }
+
+    override func mouseDragged(with event: NSEvent) {
+        isPressed = bounds.contains(convert(event.locationInWindow, from: nil))
+    }
 
     override func mouseUp(with event: NSEvent) {
+        isPressed = false
         if bounds.contains(convert(event.locationInWindow, from: nil)) { onEdit?() }
     }
 

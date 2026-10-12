@@ -49,6 +49,8 @@ final class FindBar: NSView, NSTextFieldDelegate {
         // The same close glyph as a tab's.
         let closeButton = Self.button("xmark", "Done (Escape)")
         closeButton.image = Theme.closeImage(size: 9, label: "Done (Escape)")
+        // And the same round plate.
+        (closeButton as? HoverButton)?.plateRadius = Theme.ButtonSize.inline / 2
         for (button, action) in [
             (previousButton, #selector(previous(_:))),
             (nextButton, #selector(next(_:))),

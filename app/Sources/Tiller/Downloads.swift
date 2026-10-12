@@ -323,7 +323,7 @@ private final class DownloadRowView: NSView {
     private let name = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
     private let progress = NSProgressIndicator()
-    private let action = NSButton()
+    private let action = HoverButton()
     /// The path the icon was loaded for, and whether it came from the file
     /// itself. Asking for an icon costs a trip to LaunchServices, so it
     /// happens once per path, and once more when the file lands on disk.
@@ -355,6 +355,8 @@ private final class DownloadRowView: NSView {
 
         action.isBordered = false
         action.bezelStyle = .accessoryBarAction
+        // Round, as its glyphs are circles.
+        action.plateRadius = Self.actionSize / 2
         action.imagePosition = .imageOnly
         action.contentTintColor = .secondaryLabelColor
         action.target = self

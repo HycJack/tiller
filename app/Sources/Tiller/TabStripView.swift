@@ -68,8 +68,6 @@ final class TabStripView: NSView {
         super.init(frame: frame)
         clipsToBounds = true
         wantsLayer = true
-        edgeFade.startPoint = CGPoint(x: 0, y: 0.5)
-        edgeFade.endPoint = CGPoint(x: 1, y: 0.5)
         // VoiceOver reads the tabs as one group, with each one's place in it.
         setAccessibilityElement(true)
         setAccessibilityRole(.tabGroup)
@@ -134,8 +132,9 @@ final class TabStripView: NSView {
             if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) { delta = event.scrollingDeltaX }
             userScrolled = true
         }
+        let before = scrollOffset
         scrollOffset -= delta * (event.hasPreciseScrollingDeltas ? 1 : 10)
-        layoutItems(animated: false, reveal: false)
+        layoutItems(animated: false, reveal: false, scrolledFrom: before)
     }
 
     override func updateTrackingAreas() {
@@ -194,8 +193,9 @@ final class TabStripView: NSView {
             : NSRect(x: position, y: 0, width: length, height: bounds.height)
     }
 
-    /// `reveal` scrolls the selected tab into view.
-    private func layoutItems(animated: Bool, fadeIn: [TabItemView] = [], reveal: Bool = true) {
+    /// `reveal` scrolls the selected tab into view. `scrolledFrom` is the
+    /// offset before a scroll, which moves only the tabs in view.
+    private func layoutItems(animated: Bool, fadeIn: [TabItemView] = [], reveal: Bool = true, scrolledFrom: CGFloat? = nil) {
         guard !items.isEmpty else { return }
         // Under Reduce Motion tabs land in their new places at once.
         let animated = animated && !Theme.reduceMotion
@@ -213,7 +213,14 @@ final class TabStripView: NSView {
             }
             scrollOffset = min(max(0, scrollOffset), total - extent)
         }
+        // Scrolled against an end, as momentum does for a while, nothing moves.
+        if let scrolledFrom, scrolledFrom == scrollOffset { return }
         updateEdgeFade(overflowing: total > extent, total: total)
+        // A scroll moves only the tabs that were or will be in view. One out
+        // of view both before and after keeps its old frame, which a later
+        // layout puts right; moving hundreds per scroll step adds up.
+        let visible = isVertical ? bounds.insetBy(dx: 0, dy: -length) : bounds.insetBy(dx: -length, dy: 0)
+        let culls = scrolledFrom != nil && !animated
         for item in fadeIn {
             item.frame = slot(items.firstIndex(of: item) ?? 0, length: length)
             item.alphaValue = 0
@@ -223,9 +230,10 @@ final class TabStripView: NSView {
             context.allowsImplicitAnimation = animated
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             for (index, item) in items.enumerated() where item !== drag?.item {
+                let frame = slot(index, length: length)
+                if culls, !item.frame.intersects(visible), !frame.intersects(visible) { continue }
                 item.isCompact = compact
                 item.closesOnTrailing = isVertical && !compact
-                let frame = slot(index, length: length)
                 if animated {
                     item.animator().frame = frame
                     item.animator().alphaValue = 1
@@ -244,17 +252,22 @@ final class TabStripView: NSView {
         }
     }
 
-    /// Fades a row's leading end when tabs are scrolled past it and its
-    /// trailing end when more follow, so clipped tabs show they are there.
+    /// Fades a row's or column's leading end when tabs are scrolled past it
+    /// and its trailing end when more follow, so clipped tabs show they are
+    /// there.
     private func updateEdgeFade(overflowing: Bool, total: CGFloat) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        guard !isVertical, overflowing, bounds.width > 0 else {
+        guard overflowing, extent > 0 else {
             layer?.mask = nil
             return
         }
-        let fade = min(Self.edgeFadeLength / bounds.width, 0.5)
+        let fade = min(Self.edgeFadeLength / extent, 0.5)
+        // The strip is flipped, so its layer's y runs down: a column starts
+        // at the top.
+        edgeFade.startPoint = isVertical ? CGPoint(x: 0.5, y: 0) : CGPoint(x: 0, y: 0.5)
+        edgeFade.endPoint = isVertical ? CGPoint(x: 0.5, y: 1) : CGPoint(x: 1, y: 0.5)
         let opaque = CGColor(gray: 0, alpha: 1)
         let clear = CGColor(gray: 0, alpha: 0)
         edgeFade.colors = [
@@ -462,19 +475,36 @@ final class TabItemView: NSView {
         // restored at launch or unloaded to save memory, is dimmed for that.
         let dimmed = !tab.isStarted && !isSelected
         titleLabel.textColor = dimmed ? .secondaryLabelColor : .labelColor
-        icon.alphaValue = dimmed ? 0.5 : 1
         // A compact tab only offers to close when it is the selected one, so a
         // pass of the mouse along a crowded row can't hit a close button.
         let showsClose = closesOnTrailing ? isHovered || isSelected : isHovered && (!isCompact || isSelected)
-        closeButton.isHidden = !showsClose
+        Self.show(closeButton, showsClose, alpha: 1)
         titleToClose.isActive = closesOnTrailing && showsClose
         let coversIcon = showsClose && !closesOnTrailing
-        icon.isHidden = coversIcon || tab.isLoading
+        Self.show(icon, !(coversIcon || tab.isLoading), alpha: dimmed ? 0.5 : 1)
         if tab.isLoading && !coversIcon {
             spinner.startAnimation(nil)
         } else {
             spinner.stopAnimation(nil)
         }
+    }
+
+    /// Shows or hides `view`. Coming into view under the mouse it fades in
+    /// to `alpha`, as the close button takes the icon's place, rather than
+    /// popping; it hides at once, so the two never overlap.
+    private static func show(_ view: NSView, _ shown: Bool, alpha: CGFloat) {
+        guard shown else {
+            view.isHidden = true
+            return
+        }
+        guard view.isHidden, view.window != nil, !Theme.reduceMotion else {
+            view.isHidden = false
+            view.alphaValue = alpha
+            return
+        }
+        view.alphaValue = 0
+        view.isHidden = false
+        withEasing(Theme.Duration.quick) { view.animator().alphaValue = alpha }
     }
 
     override func updateLayer() {
