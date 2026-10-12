@@ -51,6 +51,8 @@ beta shows what `## Unreleased` holds at the time.
   Saved passwords load in the background as a profile opens.
 - Opening another tab of a site no longer rewrites its icon to history,
   and history queries reuse their prepared statements.
+- Back and forward mouse side buttons work with Logi Options+ too, which
+  sends swipe gestures instead of standard mouse button events on macOS.
 
 ## 0.2.1
 
