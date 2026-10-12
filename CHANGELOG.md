@@ -7,6 +7,8 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+## 0.2.1
+
 - The agent chat fades out under its header and above the message field
   as it scrolls, instead of cutting a line in half at the edge.
 - The start page's tiles line up from the left when there are fewer than
