@@ -257,6 +257,14 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         scrollView.documentView = transcript
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        // Legacy scrollers (a mouse attached) take width when they appear, and
+        // the transcript rewraps to fit; near one screen tall that flips until
+        // AppKit gives up on layout. AppKit resets the style when the system
+        // preference changes, so it is set again then.
+        scrollView.scrollerStyle = .overlay
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(scrollerStyleChanged(_:)), name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil
+        )
         scrollView.drawsBackground = false
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = Self.insets
@@ -358,6 +366,12 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     override func viewDidUnhide() {
         super.viewDidUnhide()
         if !recordsLoaded { needsLayout = true }
+    }
+
+    /// The scroll view resets its own style on the same notification, so this
+    /// waits for that to happen first.
+    @objc private func scrollerStyleChanged(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.scrollView.scrollerStyle = .overlay } }
     }
 
     @objc private func transcriptScrolled(_ notification: Notification) {

@@ -15,6 +15,8 @@ beta shows what `## Unreleased` holds at the time.
 - Agents and the `tiller` tool no longer load every tab restored at launch.
   They load only the tab they act on, and `list_tabs` says whether each
   tab is loaded. Tab ids stay the same while a tab is unloaded.
+- Fixed a crash in the agent chat with a mouse attached, when a
+  conversation grew to about one screen tall.
 
 ## 0.1.5
 
