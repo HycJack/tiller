@@ -7,6 +7,8 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+## 0.2.0
+
 - Background tabs left unused for 30 minutes unload to free their memory,
   and sooner when the Mac runs low on memory. An unloaded tab keeps its
   place, shows a dimmed title and icon, and loads again when selected.
