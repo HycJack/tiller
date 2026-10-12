@@ -7,6 +7,9 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+- Back and forward mouse side buttons work with Logi Options+ too, which
+  sends swipe gestures instead of standard mouse button events on macOS.
+
 ## 0.2.1
 
 - The agent chat fades out under its header and above the message field
