@@ -38,7 +38,7 @@ final class TabStripView: NSView {
 
     private static let maxTabWidth: CGFloat = 240
     /// Below this, tabs show only their icon.
-    private static let titleMinWidth: CGFloat = 104
+    static let titleMinWidth: CGFloat = 104
     private static let minTabWidth: CGFloat = 34
     private static let rowHeight: CGFloat = 34
     private static let animationDuration = Theme.Duration.slide
@@ -137,11 +137,16 @@ final class TabStripView: NSView {
         layoutItems(animated: false, reveal: false, scrolledFrom: before)
     }
 
+    private var hoverArea: NSTrackingArea?
+
+    // Only its own area is replaced, leaving AppKit's, such as the tooltip's.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(
-            rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -516,11 +521,16 @@ final class TabItemView: NSView {
 
     // MARK: Mouse
 
+    private var hoverArea: NSTrackingArea?
+
+    // Only its own area is replaced, leaving AppKit's, such as the tooltip's.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(
-            rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
         // A tab that slides under a still mouse, or out from under it, gets
         // no enter or exit event.
         if let window, NSApp.isActive {
@@ -548,9 +558,21 @@ final class TabItemView: NSView {
         strip?.endDrag()
     }
 
+    /// Whether the middle button went down on this tab, so a release here
+    /// from a press that began elsewhere closes nothing.
+    private var middlePressed = false
+
+    override func otherMouseDown(with event: NSEvent) {
+        guard event.buttonNumber == 2 else { return super.otherMouseDown(with: event) }
+        middlePressed = true
+    }
+
     // Middle click closes, as in other browsers.
     override func otherMouseUp(with event: NSEvent) {
-        if event.buttonNumber == 2 { onClose?() }
+        guard event.buttonNumber == 2 else { return super.otherMouseUp(with: event) }
+        let pressed = middlePressed
+        middlePressed = false
+        if pressed, bounds.contains(convert(event.locationInWindow, from: nil)) { onClose?() }
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -643,11 +665,16 @@ final class NewTabRowView: NSView {
         withEasing { layer?.backgroundColor = fill.layerColor }
     }
 
+    private var hoverArea: NSTrackingArea?
+
+    // Only its own area is replaced, leaving AppKit's, such as the tooltip's.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(
-            rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
     }
 
     override func mouseEntered(with event: NSEvent) { isHovered = true }

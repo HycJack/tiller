@@ -1156,9 +1156,7 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         case .text(let text, _):
             row = AgentMarkdown.label(text)
         case .tool(let name, let detail, let isError, let summary):
-            let call = ToolRowView(name: name, detail: detail)
-            call.finish(isError: isError, summary: summary)
-            row = call
+            row = ToolRowView(name: name, detail: detail, finished: (isError, summary))
         case .note(let text):
             row = NoteView(text: text)
         case .error(let text):

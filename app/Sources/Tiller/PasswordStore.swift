@@ -65,14 +65,41 @@ final class PasswordStore {
     /// `entries` by origin. The address bar asks on every page change.
     private var byOrigin: [String: [Entry]] = [:]
     private let path: String
+    /// Whether `entries` holds the file yet. It is read off the main thread
+    /// as a profile opens, and announced with `passwordsDidChange`.
+    private var loaded = false
 
     init(profileID: String, folder: String) {
         self.profileID = profileID
         path = folder + "/passwords.json"
-        if let data = FileManager.default.contents(atPath: path) {
-            entries = (try? JSONDecoder().decode([Entry].self, from: data)) ?? []
-            byOrigin = Dictionary(grouping: entries, by: \.origin)
+        let path = path
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let entries = Self.read(path)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.didRead(entries) }
+            }
         }
+    }
+
+    nonisolated private static func read(_ path: String) -> [Entry] {
+        guard let data = FileManager.default.contents(atPath: path) else { return [] }
+        return (try? JSONDecoder().decode([Entry].self, from: data)) ?? []
+    }
+
+    private func didRead(_ entries: [Entry]) {
+        guard !loaded else { return }
+        loaded = true
+        guard !entries.isEmpty else { return }
+        self.entries = entries
+        NotificationCenter.default.post(name: .passwordsDidChange, object: self)
+    }
+
+    /// Reads the file now if the read in the background hasn't landed, so
+    /// a change starts from what is saved rather than from nothing.
+    private func loadNow() {
+        guard !loaded else { return }
+        loaded = true
+        entries = Self.read(path)
     }
 
     func logins(for origin: String) -> [Entry] {
@@ -94,6 +121,7 @@ final class PasswordStore {
     /// Returns how many were saved.
     func merge(_ logins: [SavedLogin]) async throws -> Int {
         guard !logins.isEmpty else { return 0 }
+        loadNow()
         let hasEntries = !entries.isEmpty
         let profileID = profileID
         let key = try await Task.detached { try PasswordKey.load(profileID: profileID, create: !hasEntries) }.value
@@ -107,6 +135,7 @@ final class PasswordStore {
     }
 
     func remove(_ ids: Set<String>) throws {
+        loadNow()
         try save(entries.filter { !ids.contains($0.id) })
     }
 
@@ -121,6 +150,8 @@ final class PasswordStore {
         let data = try JSONEncoder().encode(sorted)
         try data.write(to: URL(fileURLWithPath: path), options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+        // What was saved replaces the file's contents, should the read still be on its way.
+        loaded = true
         self.entries = sorted
         NotificationCenter.default.post(name: .passwordsDidChange, object: self)
     }

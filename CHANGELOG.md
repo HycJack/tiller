@@ -7,6 +7,51 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+- With no recently closed tabs below them, the start page's tiles sit
+  centered instead of at the left of an empty row.
+- A page fades in from under the start page, and from the cover a new
+  tab shows in dark mode, instead of cutting in. In dark mode a new page
+  shows as soon as it has nearly loaded, and pages from Back and Forward
+  show sooner.
+- Address suggestions and extension popups fade in and out. Opening a
+  suggestion still closes the list at once.
+- The tab sidebar can no longer be dragged so narrow that tabs lose their
+  titles while it is still expanded.
+- Tooltips on tabs, the new-tab row, suggestions and downloads no longer
+  stop showing after the mouse has moved over them.
+- Middle-clicking closes a tab only when the click both starts and ends
+  on that tab.
+- The address bar, favicons, the downloads button and window resizing do
+  less repeated work.
+- Resizing the window or the agent panel only rewraps the chat messages
+  in view, and catches up on the rest when the drag ends. A code block
+  streaming in measures only its new lines, and opening a saved chat no
+  longer starts and stops a spinner for each step.
+- In agents' answers, nested lists indent one level per level however
+  many spaces they use, a list item's wrapped lines line up with its
+  text, and numbered and bulleted items' text starts at the same place.
+  Task lists show checkboxes instead of brackets, with finished tasks
+  dimmed, and links in quotes keep their color.
+- Tables have the same corners as code blocks, the empty chat's
+  suggestions line up their text, and an error's Try Again button
+  matches the panel's other buttons.
+- In Settings → General, "Unload after" and "Custom search URL" dim
+  their labels too when the setting they depend on is off, and the note
+  under the search URL says to pick Custom to use it.
+- Agent tool results, stderr from an agent's CLI, replies to the `tiller`
+  tool and download progress do less work on the main thread.
+- Start page tiles no longer rebuild and fade in again when a page title
+  or icon changes; a tile updates in place. Very small site icons are
+  no longer stretched to full size, and the background grain is
+  drawn at full resolution on Retina screens.
+- Clear History also removes the cleared pages from the history file
+  itself, rather than leaving them in its journal and free space.
+- Saving open tabs no longer writes on the main thread after every tab
+  change, and the session file is private from the moment it is written.
+  Saved passwords load in the background as a profile opens.
+- Opening another tab of a site no longer rewrites its icon to history,
+  and history queries reuse their prepared statements.
+
 ## 0.2.1
 
 - The agent chat fades out under its header and above the message field

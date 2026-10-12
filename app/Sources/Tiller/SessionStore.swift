@@ -77,15 +77,50 @@ final class SessionStore {
         NotificationCenter.default.post(name: .closedTabsDidChange, object: self)
     }
 
-    /// Writes a pending change now rather than after the short delay.
+    /// Writes a pending change now rather than after the short delay, and
+    /// waits for it to land, for a window closing or Tiller quitting.
     func flush() {
+        save()
+        Self.writer.sync {}
+    }
+
+    /// Encodes here, where the session lives, and writes on `writer`.
+    private func save() {
         guard writeScheduled else { return }
         writeScheduled = false
+        let path = path
         do {
-            try JSONEncoder().encode(session).write(to: URL(fileURLWithPath: path), options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+            let data = try JSONEncoder().encode(session)
+            Self.writer.async {
+                do {
+                    try Self.write(data, to: path)
+                } catch {
+                    NSLog("Tiller: could not save session: %@", error.localizedDescription)
+                }
+            }
         } catch {
             NSLog("Tiller: could not save session: %@", error.localizedDescription)
+        }
+    }
+
+    /// One queue for every profile, so writes land in the order they were made.
+    private static let writer = DispatchQueue(label: "dev.sorrycc.tiller.session", qos: .utility)
+
+    /// Replaces the file in one step with one that is private from the
+    /// start, rather than chmodding it once it is there.
+    nonisolated private static func write(_ data: Data, to path: String) throws {
+        let temp = path + ".tmp"
+        unlink(temp)
+        let fd = open(temp, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        do {
+            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            try handle.write(contentsOf: data)
+            try handle.close()
+            guard rename(temp, path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        } catch {
+            unlink(temp)
+            throw error
         }
     }
 
@@ -93,8 +128,8 @@ final class SessionStore {
     private func scheduleWrite() {
         guard !writeScheduled else { return }
         writeScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            MainActor.assumeIsolated { self?.flush() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            MainActor.assumeIsolated { self?.save() }
         }
     }
 }

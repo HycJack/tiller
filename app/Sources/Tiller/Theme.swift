@@ -83,6 +83,12 @@ enum Theme {
         static let tile: CGFloat = 18
     }
 
+    /// The address bar's and find bar's round-ended field.
+    enum Capsule {
+        static let height: CGFloat = 30
+        static let radius: CGFloat = height / 2
+    }
+
     static let hairlineWidth: CGFloat = 1
 
     // MARK: Type
@@ -248,6 +254,20 @@ func withEasing(_ duration: TimeInterval = Theme.Duration.standard, _ changes: (
     }
 }
 
+/// Fades `view` to alpha 0 over `duration`, at once under Reduce Motion,
+/// then runs `done`, which takes the view away. A caller that may show the
+/// view again meanwhile checks in `done` that it is still meant to go.
+@MainActor
+func fadeOut(_ view: NSView, _ duration: TimeInterval = Theme.Duration.standard, then done: @escaping @MainActor () -> Void) {
+    NSAnimationContext.runAnimationGroup { context in
+        context.duration = Theme.reduceMotion ? 0 : duration
+        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        view.animator().alphaValue = 0
+    } completionHandler: {
+        MainActor.assumeIsolated { done() }
+    }
+}
+
 /// A borderless button that shows a faint plate under the mouse and a darker
 /// one while pressed, as rows and tabs do, so a small icon target still
 /// answers the pointer. The button's cell draws over the plate as usual.
@@ -255,6 +275,12 @@ class HoverButton: NSButton {
     /// The plate's corner radius; half the side makes it round.
     var plateRadius = Theme.Radius.small {
         didSet { layer?.cornerRadius = plateRadius }
+    }
+
+    /// The `labelColor` alpha of the plate at rest, for a button with a
+    /// title that should read as one before the mouse reaches it. Clear by default.
+    var restFill: CGFloat = 0 {
+        didSet { updatePlate() }
     }
 
     private var isHovered = false {
@@ -278,7 +304,14 @@ class HoverButton: NSButton {
     required init?(coder: NSCoder) { fatalError() }
 
     private func updatePlate() {
-        let fill = isEnabled ? Theme.fill(hovered: isHovered, pressed: isPressed) : .clear
+        let fill: NSColor
+        if !isEnabled {
+            fill = .clear
+        } else if isHovered || isPressed {
+            fill = Theme.fill(hovered: isHovered, pressed: isPressed)
+        } else {
+            fill = restFill > 0 ? Theme.fill(restFill) : .clear
+        }
         withEasing(Theme.Duration.quick) { layer?.backgroundColor = fill.layerColor }
     }
 

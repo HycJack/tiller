@@ -67,7 +67,7 @@ final class FindBar: NSView, NSTextFieldDelegate {
         row.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 8)
         glass.contentView = row
         // As tall and as round as the address bar.
-        glass.cornerRadius = 15
+        glass.cornerRadius = Theme.Capsule.radius
         // A faint wash of the window color, so the capsule still shows on a
         // white page, where clear glass all but disappears.
         glass.tintColor = NSColor.windowBackgroundColor.dynamic(alpha: 0.5)
@@ -78,7 +78,7 @@ final class FindBar: NSView, NSTextFieldDelegate {
             glass.bottomAnchor.constraint(equalTo: bottomAnchor),
             glass.leadingAnchor.constraint(equalTo: leadingAnchor),
             glass.trailingAnchor.constraint(equalTo: trailingAnchor),
-            glass.heightAnchor.constraint(equalToConstant: 30),
+            glass.heightAnchor.constraint(equalToConstant: Theme.Capsule.height),
             glass.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
         ])
         // Narrows when the page is too narrow to hold it.

@@ -210,17 +210,25 @@ wrap_download_handler! {
                     return;
                 }
                 let now = Instant::now();
-                let report = Report::of(browser, item);
                 // Too soon after the last one: hold it, and have it sent
                 // once the interval is up unless a newer one replaces it.
+                // Chromium calls this for every chunk, so a report already
+                // held only takes the new byte counts: its path and addresses
+                // don't change while the download runs.
                 let schedule = THROTTLE.with_borrow_mut(|map| {
                     let entry = map.entry(id).or_insert(Throttle { last: now - PROGRESS_INTERVAL, held: None, scheduled: false });
                     if now.duration_since(entry.last) >= PROGRESS_INTERVAL {
                         entry.last = now;
                         entry.held = None;
-                        Ok(report)
+                        Ok(Report::of(browser, item))
                     } else {
-                        entry.held = Some(report);
+                        match &mut entry.held {
+                            Some(held) => {
+                                held.received = item.received_bytes();
+                                held.total = item.total_bytes();
+                            }
+                            None => entry.held = Some(Report::of(browser, item)),
+                        }
                         let schedule = !entry.scheduled;
                         entry.scheduled = true;
                         Err(schedule)
