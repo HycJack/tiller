@@ -35,6 +35,20 @@ final class SQLiteDatabase: @unchecked Sendable {
         }
     }
 
+    /// Runs one statement once for each of `rows`, binding its values in
+    /// order. The statement is prepared once, which counts for thousands.
+    func runEach(_ sql: String, _ rows: [[Any?]]) throws {
+        try withStatement(sql, []) { statement in
+            for values in rows {
+                sqlite3_reset(statement)
+                sqlite3_clear_bindings(statement)
+                try bind(values, to: statement)
+                let result = sqlite3_step(statement)
+                guard result == SQLITE_DONE || result == SQLITE_ROW else { throw error() }
+            }
+        }
+    }
+
     /// Runs a query and maps each row.
     func query<T>(_ sql: String, _ values: [Any?] = [], row: (Row) throws -> T) throws -> [T] {
         try withStatement(sql, values) { statement in
@@ -66,6 +80,11 @@ final class SQLiteDatabase: @unchecked Sendable {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw error() }
         defer { sqlite3_finalize(statement) }
+        try bind(values, to: statement)
+        return try body(statement)
+    }
+
+    private func bind(_ values: [Any?], to statement: OpaquePointer) throws {
         for (offset, value) in values.enumerated() {
             let index = Int32(offset + 1)
             switch value {
@@ -80,7 +99,6 @@ final class SQLiteDatabase: @unchecked Sendable {
             default: throw SQLiteError(description: "can't bind \(type(of: value))")
             }
         }
-        return try body(statement)
     }
 
     private func error() -> SQLiteError {

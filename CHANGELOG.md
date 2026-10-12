@@ -7,6 +7,27 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+- The agent chat fades out under its header and above the message field
+  as it scrolls, instead of cutting a line in half at the edge.
+- The start page's tiles line up from the left when there are fewer than
+  four, rather than spreading out with gaps between them.
+- Address suggestions line up their icons and titles with the address
+  field's icon and text.
+- Small polish: Copy and download buttons light up under the mouse, a
+  tab's close button and the skill picker fade in, steps fold away with a
+  fade when a turn ends, queued messages show a press, the find bar's
+  close button has a round plate, chat history dates are easier to read,
+  and Remote debugging moves to the end of Settings → General.
+- Chats in background tabs or a hidden panel no longer redraw streamed
+  text 20 times a second; they catch up when shown.
+- Scrolling a long tab sidebar only moves the tabs in view, and resizing
+  the window lays out the toolbar once, when the drag ends.
+- The Downloads list no longer updates while closed, and the first
+  message to an agent no longer freezes the window while a login shell
+  looks for its command.
+- Importing a long Chrome history no longer holds up the address bar's
+  suggestions and the start page until it finishes.
+
 ## 0.2.0
 
 - Background tabs left unused for 30 minutes unload to free their memory,

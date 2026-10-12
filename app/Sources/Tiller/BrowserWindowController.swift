@@ -1102,6 +1102,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         fitTabStrip()
     }
 
+    /// The gap check, which lays out the whole window, waits out a live
+    /// resize, so a drag doesn't lay it out twice for every step.
+    func windowDidEndLiveResize(_ notification: Notification) {
+        scheduleToolbarGapCheck()
+    }
+
     /// Room left after the window buttons, back, forward, reload, new tab, the
     /// extension buttons, the profile button and the agent button. The address
     /// bar gets the same in the tabs' place, plus the new-tab button's.
@@ -1137,7 +1143,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     private var toolbarGapRetries = 0
 
     private func scheduleToolbarGapCheck(after delay: TimeInterval = 0) {
-        guard !toolbarGapCheckPending else { return }
+        guard !toolbarGapCheckPending, window?.inLiveResize != true else { return }
         toolbarGapCheckPending = true
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else { return }
@@ -1205,7 +1211,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             showToolbarItem(Item.downloads, shown)
             fitTabStrip()
         }
-        (downloadsPopover?.contentViewController as? DownloadsController)?.reload()
+        // Only while it is open: a closed one is never shown again, as the
+        // next click makes a new one, and progress comes 4 times a second.
+        guard let downloadsPopover, downloadsPopover.isShown else { return }
+        (downloadsPopover.contentViewController as? DownloadsController)?.reload()
     }
 
     /// A load that became a download leaves the tab on its page, so the tab

@@ -251,7 +251,7 @@ func withEasing(_ duration: TimeInterval = Theme.Duration.standard, _ changes: (
 /// A borderless button that shows a faint plate under the mouse and a darker
 /// one while pressed, as rows and tabs do, so a small icon target still
 /// answers the pointer. The button's cell draws over the plate as usual.
-final class HoverButton: NSButton {
+class HoverButton: NSButton {
     /// The plate's corner radius; half the side makes it round.
     var plateRadius = Theme.Radius.small {
         didSet { layer?.cornerRadius = plateRadius }

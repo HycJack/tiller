@@ -300,11 +300,14 @@ private final class SuggestionRow: NSView {
         url.setContentCompressionResistancePriority(.defaultLow - 1, for: .horizontal)
         let stack = NSStackView(views: [icon, title, url])
         stack.spacing = 8
-        stack.setCustomSpacing(10, after: icon)
+        // The icon and title sit right under the address field's icon and
+        // text: the list is inset 6 from the capsule's edge, the field's icon
+        // 10, with its text 6 after the icon.
+        stack.setCustomSpacing(6, after: icon)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
             // Only once the address is in the row: the two need a common ancestor.

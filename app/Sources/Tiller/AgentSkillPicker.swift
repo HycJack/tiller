@@ -58,7 +58,16 @@ final class SkillPicker: NSVisualEffectView {
             }
             select(0)
         }
-        isHidden = matches.isEmpty
+        if isHidden && !matches.isEmpty && !Theme.reduceMotion {
+            // It fades in over the transcript rather than popping up. It
+            // hides at once, as the keys it takes go back to the field then.
+            alphaValue = 0
+            isHidden = false
+            withEasing(Theme.Duration.quick) { animator().alphaValue = 1 }
+        } else {
+            isHidden = matches.isEmpty
+            alphaValue = 1
+        }
         return !matches.isEmpty
     }
 

@@ -535,7 +535,7 @@ private final class HistoryCellView: NSView {
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let subtitleLabel = NSTextField(labelWithString: subtitle)
         subtitleLabel.font = .systemFont(ofSize: Theme.FontSize.caption)
-        subtitleLabel.textColor = isCurrent ? .secondaryLabelColor : .tertiaryLabelColor
+        subtitleLabel.textColor = .secondaryLabelColor
         subtitleLabel.lineBreakMode = .byTruncatingTail
         subtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         for view in [icon, titleLabel, subtitleLabel] {

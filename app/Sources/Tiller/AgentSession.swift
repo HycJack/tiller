@@ -1115,6 +1115,20 @@ enum AgentEnvironment {
         return found
     }
 
+    /// Whether finding the CLI would start a login shell: Settings has no
+    /// path for it, it isn't in the usual folders, and the shell's last
+    /// answer is unknown or stale. Callers on the main thread look it up in
+    /// the background first, so a send doesn't freeze on a slow `.zshrc`.
+    static func needsShellLookup(_ kind: AgentKind, settings: ProfileSettings) -> Bool {
+        guard settings.agentPath(for: kind) == nil else { return false }
+        for directory in searchDirectories where FileManager.default.isExecutableFile(atPath: "\(directory)/\(kind.rawValue)") {
+            return false
+        }
+        guard let cached = shellFound.withLock({ $0[kind.rawValue] }) else { return true }
+        if let path = cached.path { return !FileManager.default.isExecutableFile(atPath: path) }
+        return Date().timeIntervalSince(cached.asked) >= 60
+    }
+
     /// Whether the CLI can be run, from what's known without starting a
     /// shell, so a menu can ask as it opens. Nil until a lookup has said.
     static func isAvailable(_ kind: AgentKind, settings: ProfileSettings) -> Bool? {

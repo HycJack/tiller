@@ -511,14 +511,6 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
         addRow("Accent color:", accentPopUp)
         addNote(Self.note("Selections, chat bubbles and busy dots. Pages follow the appearance."))
 
-        let remoteDebugging = NSButton(
-            checkboxWithTitle: "Allow remote debugging (CDP)", target: self, action: #selector(remoteDebuggingChanged(_:))
-        )
-        remoteDebugging.state = Settings.remoteDebuggingEnabled ? .on : .off
-        remoteDebuggingButton = remoteDebugging
-        Self.linkLabel(of: addRow("Remote debugging:", remoteDebugging), to: remoteDebugging)
-        addNote(Self.note("For every profile. Takes effect on next launch."))
-
         let searchPopUp = Self.popUp(
             SearchEngine.allCases, title: \.displayName, selected: settings.searchEngine,
             target: self, action: #selector(searchEngineChanged(_:))
@@ -551,6 +543,15 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
             Self.linkLabel(of: addRow("Updates:", updates), to: automatic)
             addNote(Self.note("For every profile."))
         }
+
+        // Last, as it is for developers and off for almost everyone.
+        let remoteDebugging = NSButton(
+            checkboxWithTitle: "Allow remote debugging (CDP)", target: self, action: #selector(remoteDebuggingChanged(_:))
+        )
+        remoteDebugging.state = Settings.remoteDebuggingEnabled ? .on : .off
+        remoteDebuggingButton = remoteDebugging
+        Self.linkLabel(of: addRow("Remote debugging:", remoteDebugging), to: remoteDebugging)
+        addNote(Self.note("For every profile. Takes effect on next launch."))
     }
 
     /// An import from Chrome may have changed these while the window was closed.
