@@ -108,6 +108,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     private var wakeTimers: [ObjectIdentifier: DispatchWorkItem] = [:]
     /// How long a tab stays awake after an agent's last click, type or screenshot.
     private static let wakeDuration: TimeInterval = 30
+    /// Unloads tabs left unused past the profile's delay.
+    private var unloadTimer: Timer?
+    /// Unloads tabs when the Mac runs short of memory.
+    private var memoryPressure: DispatchSourceMemoryPressure?
+    /// How often the timer looks for tabs to unload.
+    private static let unloadCheckInterval: TimeInterval = 60
 
     /// Opens the `restored` tabs, then `url` in a selected tab after them. With
     /// no `url`, selects the restored tab at `selected`. One of the two must
@@ -204,6 +210,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         center.addObserver(self, selector: #selector(tabLayoutChanged(_:)), name: .tabLayoutDidChange, object: nil)
         center.addObserver(self, selector: #selector(downloadsChanged(_:)), name: .downloadsDidChange, object: nil)
         center.addObserver(self, selector: #selector(downloadStarted(_:)), name: .downloadDidStart, object: nil)
+        watchForUnloading()
         // Restored tabs load when first selected.
         for saved in restored {
             openTab(url: saved.isBlank ? "about:blank" : saved.url, select: false, restoring: saved, lazily: true)
@@ -282,7 +289,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             statusBubble.show("")
             if let fullscreenTab, fullscreenTab !== tab { fullscreenTab.exitFullscreen() }
         }
-        if let old = selectedTab, !isAwake(old) { old.hostView.isHidden = true }
+        if let old = selectedTab {
+            old.lastActive = Date()
+            if !isAwake(old) { old.hostView.isHidden = true }
+        }
         // Over the tabs an agent keeps awake, and under the status bubble.
         // The find bar closed above.
         if tab !== selectedTab {
@@ -290,6 +300,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             contentView.addSubview(statusBubble, positioned: .above, relativeTo: nil)
         }
         selectedTab = tab
+        tab.lastActive = Date()
         tab.hostView.isHidden = false
         start(tab)
         tabStrip.update(tabs: tabs, selected: tab)
@@ -329,6 +340,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             MainActor.assumeIsolated {
                 guard let self, let tab else { return }
                 self.wakeTimers[ObjectIdentifier(tab)] = nil
+                tab.lastActive = Date()
                 if tab !== self.selectedTab { tab.hostView.isHidden = true }
             }
         }
@@ -339,6 +351,59 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     private func isAwake(_ tab: Tab) -> Bool {
         wakeTimers[ObjectIdentifier(tab)] != nil
+    }
+
+    // MARK: Unloading
+
+    /// Checks for tabs to unload every minute, and whenever the Mac reports
+    /// memory pressure.
+    private func watchForUnloading() {
+        unloadTimer = Timer.scheduledTimer(withTimeInterval: Self.unloadCheckInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.unload(self.unloadCandidates(unusedFor: self.profile.settings.tabUnloadDelay.interval))
+            }
+        }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { [weak self, weak source] in
+            MainActor.assumeIsolated {
+                guard let self, let event = source?.data else { return }
+                self.memoryPressureChanged(critical: event.contains(.critical))
+            }
+        }
+        source.resume()
+        memoryPressure = source
+    }
+
+    /// Short of memory: the half of the background tabs unused longest
+    /// unload, or all of them when it is critical. A tab just left gets a
+    /// minute's grace before a warning takes it.
+    private func memoryPressureChanged(critical: Bool) {
+        let candidates = unloadCandidates(unusedFor: critical ? 0 : 60)
+        unload(critical ? candidates : Array(candidates.prefix((candidates.count + 1) / 2)))
+    }
+
+    /// Loaded tabs that may unload, unused longest first: not the one in
+    /// front, one an agent keeps awake or waits on, or one with the screen.
+    private func unloadCandidates(unusedFor minimum: TimeInterval) -> [Tab] {
+        guard profile.settings.unloadsInactiveTabs, !closingAll else { return [] }
+        let now = Date()
+        let waitedOn = Set(Self.loadWaiters.map { ObjectIdentifier($0.tab) })
+        return tabs
+            .filter { tab in
+                tab.isStarted && tab !== selectedTab && tab !== fullscreenTab && !isAwake(tab)
+                    && !waitedOn.contains(ObjectIdentifier(tab)) && now.timeIntervalSince(tab.lastActive) >= minimum
+            }
+            .sorted { $0.lastActive < $1.lastActive }
+    }
+
+    /// The core may keep a tab whose page is in use. Such a tab is tried again
+    /// only once the delay has passed once more.
+    private func unload(_ tabs: [Tab]) {
+        for tab in tabs {
+            tab.lastActive = Date()
+            tab.unload()
+        }
     }
 
     /// Asks a tab to close on the user's or an agent's behalf.
@@ -595,6 +660,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         remove(tab)
     }
 
+    /// A tab brought to the front or woken while it unloaded loads again.
+    func tabDidUnload(_ tab: Tab) {
+        if tab === fullscreenTab { self.tab(tab, fullscreenChanged: false) }
+        if tab === selectedTab || isAwake(tab) { start(tab) }
+    }
+
     func tab(_ tab: Tab, performKeyEquivalent event: NSEvent) -> Bool {
         performMenuKeyEquivalent(event)
     }
@@ -641,7 +712,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         menu.autoenablesItems = false
         menu.addItem(MenuActionItem(title: "New Tab") { [weak self] in self?.newTab(nil) })
         menu.addItem(.separator())
-        let reload = MenuActionItem(title: "Reload") { tab.reload() }
+        let reload = MenuActionItem(title: "Reload") { [weak self] in
+            // A tab that isn't loaded loads its page instead.
+            if tab.isStarted { tab.reload() } else { self?.start(tab) }
+        }
         reload.isEnabled = !tab.isBlank
         menu.addItem(reload)
         let duplicate = MenuActionItem(title: "Duplicate Tab") { [weak self] in self?.duplicate(tab) }
@@ -1136,7 +1210,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// shouldn't keep the download's URL, or the session would fetch the file
     /// again at the next launch.
     @objc private func downloadStarted(_ notification: Notification) {
-        guard let download = notification.userInfo?["download"] as? Download, let tab = tabs.first(where: { $0.browserID == download.tabID }) else { return }
+        guard let download = notification.userInfo?["download"] as? Download, download.tabID >= 0,
+            let tab = tabs.first(where: { $0.browserID == download.tabID }) else { return }
         tab.dropPendingLoad(of: [download.url, download.originalURL])
     }
 
@@ -1296,6 +1371,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     }
 
     func windowWillClose(_ notification: Notification) {
+        unloadTimer?.invalidate()
+        memoryPressure?.cancel()
         extensionPopover?.close()
         agentPanel.shutDown()
         profile.session.flush()
@@ -1487,9 +1564,17 @@ extension BrowserWindowController {
     func control(_ method: String, params: [String: Any]) throws -> Any {
         switch method {
         case "tabs.list":
-            // Tab ids are browser ids, so every listed tab needs its browser.
-            tabs.forEach(start)
+            // Tabs that aren't loaded stay that way until a tool acts on them.
             return ["tabs": tabs.map(info)]
+        case "tabs.resolve":
+            // Before a tool reads or drives a tab: loads it if it isn't, and
+            // says so, so the caller can wait for the page.
+            let tab = try tab(for: params)
+            let started = !tab.isStarted
+            start(tab)
+            var reply = info(tab)
+            reply["started"] = started
+            return reply
         case "tabs.new":
             let url = (params["url"] as? String).map { AddressInput.url(for: $0, settings: profile.settings) } ?? "about:blank"
             return info(openTab(url: url, select: params["select"] as? Bool ?? true))
@@ -1511,7 +1596,14 @@ extension BrowserWindowController {
         case "tabs.navigate":
             let tab = try tab(for: params)
             guard let input = params["url"] as? String, !input.isEmpty else { throw ControlError("navigate needs a url") }
-            tab.load(AddressInput.url(for: input, settings: profile.settings))
+            let url = AddressInput.url(for: input, settings: profile.settings)
+            if tab.isStarted {
+                tab.load(url)
+            } else {
+                // Straight to the new page, without loading the old one first.
+                tab.hostView.frame = contentView.bounds
+                tab.start(url: url)
+            }
             tabDidChange(tab)
             return info(tab)
         case "tabs.wait_load":
@@ -1528,7 +1620,7 @@ extension BrowserWindowController {
         case "tabs.close":
             let tab = try tab(for: params)
             requestClose(tab)
-            return ["closing": Int(tab.browserID)]
+            return ["closing": tab.id]
         #if DEBUG
         case _ where method.hasPrefix("ui."):
             return try debugUI(String(method.dropFirst(3)), params: params)
@@ -1538,21 +1630,25 @@ extension BrowserWindowController {
         }
     }
 
+    /// The tab `params` names, or the selected one. An agent using it counts
+    /// as use, which keeps it from unloading.
     private func tab(for params: [String: Any]) throws -> Tab {
         guard let id = params["tab_id"] as? Int else {
             guard let selectedTab else { throw ControlError("no tab is open") }
             return selectedTab
         }
-        guard let tab = tabs.first(where: { Int($0.browserID) == id }) else { throw ControlError("no tab with id \(id)") }
+        guard let tab = tabs.first(where: { $0.id == id }) else { throw ControlError("no tab with id \(id)") }
+        tab.lastActive = Date()
         return tab
     }
 
     private func info(_ tab: Tab) -> [String: Any] {
         [
-            "id": Int(tab.browserID),
+            "id": tab.id,
             "url": tab.url,
             "title": tab.displayTitle,
             "loading": tab.isLoading,
+            "loaded": tab.isStarted,
             "selected": tab === selectedTab,
         ]
     }
@@ -1629,7 +1725,7 @@ extension BrowserWindowController {
             Self.loadWaiters.removeAll { $0 === waiter }
             waiter.graceTimer?.invalidate()
             waiter.timeoutTimer?.invalidate()
-            waiter.reply(.failure(ControlError("tab \(tab.browserID) closed")))
+            waiter.reply(.failure(ControlError("tab \(tab.id) closed")))
         }
     }
 }
@@ -1646,8 +1742,9 @@ extension BrowserWindowController {
     /// scheduled prompt with `text` as its prompt, `find` searches for
     /// `text`, `location` types `text` in the address bar, `downloads`,
     /// `sidebar` and `settings` open those, `appearance` forces `light` or
-    /// `dark`, `tabLayout` puts the tabs at `horizontal` or `vertical`, and
-    /// `resize` sets the window to `width` by `height`.
+    /// `dark`, `tabLayout` puts the tabs at `horizontal` or `vertical`,
+    /// `unloadTabs` unloads background tabs as critical memory pressure does,
+    /// and `resize` sets the window to `width` by `height`.
     func debugUI(_ action: String, params: [String: Any]) throws -> Any {
         let text = params["text"] as? String ?? ""
         switch action {
@@ -1698,6 +1795,8 @@ extension BrowserWindowController {
             frame.origin.y += frame.height - height
             frame.size = NSSize(width: width, height: height)
             window.setFrame(frame, display: true)
+        case "unloadTabs":
+            memoryPressureChanged(critical: true)
         case "focusPage":
             selectedTab?.focus()
         case "status":
@@ -1722,7 +1821,7 @@ extension BrowserWindowController {
 extension BrowserWindowController {
     func agentPanelContext(_ panel: AgentPanelView) -> String {
         guard let tab = selectedTab else { return "[Tiller: no tab is open]" }
-        return "[Tiller: selected tab \(tab.browserID), \"\(tab.displayTitle)\", \(tab.isBlank ? "about:blank" : tab.url)]"
+        return "[Tiller: selected tab \(tab.id), \"\(tab.displayTitle)\", \(tab.isBlank ? "about:blank" : tab.url)]"
     }
 
     /// Widens the divider's grab area into the panel. The divider is a point

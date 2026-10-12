@@ -7,6 +7,15 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+- Background tabs left unused for 30 minutes unload to free their memory,
+  and sooner when the Mac runs low on memory. An unloaded tab keeps its
+  place, shows a dimmed title and icon, and loads again when selected.
+  Tabs playing media, using the camera or microphone, or asking before
+  you leave stay loaded. Settings → General turns it off or sets the delay.
+- Agents and the `tiller` tool no longer load every tab restored at launch.
+  They load only the tab they act on, and `list_tabs` says whether each
+  tab is loaded. Tab ids stay the same while a tab is unloaded.
+
 ## 0.1.5
 
 - Settings → Providers takes Codex too, so Codex can run on a provider you

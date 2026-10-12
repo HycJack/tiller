@@ -8,7 +8,7 @@ Tiller exposes one set of browser tools two ways: as an MCP server for agents an
 
 | Tool | What it does |
 |---|---|
-| `list_tabs` | Id, URL, title, loading state and selection of every tab |
+| `list_tabs` | Id, URL, title, loading state, whether the page is loaded, and selection of every tab |
 | `new_tab` | Opens a URL or search in a new tab and waits for it to load. `background` leaves the selected tab in front |
 | `select_tab` | Brings a tab to the front |
 | `close_tab` | Closes a tab (the page may still ask to confirm) |
@@ -30,9 +30,11 @@ Tools act on the selected tab unless given `tab_id`, and work in background tabs
 
 Background tabs are hidden, and Chromium stops drawing hidden pages and stalls or drops their input. So `click`, `type` and `screenshot` wake their tab first: Tiller unhides it behind the selected tab, where it draws and takes input, and hides it again 30 seconds after the last of these calls. While awake, the page counts as visible, so its animations and videos run as in a front tab. `read_page` and `eval_js` don't need to wake a tab.
 
+A tab's id stays the same for as long as the tab is open. Listing tabs doesn't load them: a tab restored at launch and not yet selected, or one [unloaded to save memory](browser.md#unloading-inactive-tabs), is listed with `loaded` false, and loads its page when a tool acts on it, which then waits for the load. Tabs an agent has used in the last few minutes count as in use, so they don't unload under it.
+
 `read_page` marks each element it lists with a `data-tiller-ref` attribute, which pages can see. Refs are renumbered on every call.
 
-How it's wired: tab operations (`tabs.*`, including `tabs.wake` and `tabs.wait_load`, which answers once a tab's load ends or a moment passes with none starting) skill operations (`skills.*`, in `AgentSkills.swift`) and schedule operations (`schedules.*`, in `AgentSchedules.swift`) are answered by the Swift app (`ControlServer.swift`). Everything that touches page content is a DevTools protocol command (`Runtime.evaluate`, `Input.dispatchMouseEvent`, `Input.insertText`, `Page.captureScreenshot`) that the Rust core sends straight to the tab (`core/src/ipc.rs`, `core/src/browser.rs`).
+How it's wired: tab operations (`tabs.*`, including `tabs.resolve`, which loads the tab a tool is about to act on if it isn't, `tabs.wake` and `tabs.wait_load`, which answers once a tab's load ends or a moment passes with none starting) skill operations (`skills.*`, in `AgentSkills.swift`) and schedule operations (`schedules.*`, in `AgentSchedules.swift`) are answered by the Swift app (`ControlServer.swift`). Everything that touches page content is a DevTools protocol command (`Runtime.evaluate`, `Input.dispatchMouseEvent`, `Input.insertText`, `Page.captureScreenshot`) that the Rust core sends straight to the tab (`core/src/ipc.rs`, `core/src/browser.rs`), found by its tab id; a tab that isn't loaded has no DevTools agent to send to.
 
 To try it without an agent:
 
@@ -107,4 +109,4 @@ Three arguments test the Chrome import: `-chromeDataDir <folder>` reads a Chrome
 
 Three arguments test the agent panel without typing: `-agentPrompt "..."` opens the panel and sends that message, `-agentStopAfter <seconds>` presses Stop after that many seconds, and `-agentPasteImage YES` pastes the clipboard into the field twice before sending the prompt three seconds later.
 
-Debug builds also answer `ui.*` methods on the control socket, for driving the window from a script, such as for screenshots. Each takes `text`: `ui.agent` toggles the panel; `ui.agentAction` runs one of its buttons (`newChat`, `newTab`, `closeTab`, `history`, `tools`, `model`, `focus`, `enter`, `ctrlEnter`, or `tab1` to `tab9`); `ui.agentText` puts the text in the message field; `ui.find` searches for it; `ui.location` types it in the address bar; `ui.status` shows it in the link plate; `ui.action` runs a menu action by selector name, such as `showDevTools:`; `ui.settings` opens that pane; `ui.appearance` forces `light` or `dark` until the Appearance setting next changes; `ui.tabLayout` puts the tabs `horizontal` or `vertical`; `ui.downloads`, `ui.sidebar` and `ui.focusPage` do what they say; and `ui.resize` takes `width` and `height` instead. The socket speaks one JSON object per line, `{"id": 1, "method": "ui.find", "params": {"text": "tiller"}}`, and answers with one.
+Debug builds also answer `ui.*` methods on the control socket, for driving the window from a script, such as for screenshots. Each takes `text`: `ui.agent` toggles the panel; `ui.agentAction` runs one of its buttons (`newChat`, `newTab`, `closeTab`, `history`, `tools`, `model`, `focus`, `enter`, `ctrlEnter`, or `tab1` to `tab9`); `ui.agentText` puts the text in the message field; `ui.find` searches for it; `ui.location` types it in the address bar; `ui.status` shows it in the link plate; `ui.action` runs a menu action by selector name, such as `showDevTools:`; `ui.settings` opens that pane; `ui.appearance` forces `light` or `dark` until the Appearance setting next changes; `ui.tabLayout` puts the tabs `horizontal` or `vertical`; `ui.downloads`, `ui.sidebar` and `ui.focusPage` do what they say; `ui.unloadTabs` unloads the background tabs as critically low memory does; and `ui.resize` takes `width` and `height` instead. The socket speaks one JSON object per line, `{"id": 1, "method": "ui.find", "params": {"text": "tiller"}}`, and answers with one.

@@ -164,15 +164,17 @@ pub extern "C" fn tiller_context_release(context: c_int) {
     browser::release_context(context);
 }
 
-/// Creates a browser in request context `context`, filling `parent_view` (an
-/// `NSView *`). Returns the browser id, or -1 on failure. Callbacks run on
-/// the main thread.
+/// Creates a browser for tab `tab_id` in request context `context`, filling
+/// `parent_view` (an `NSView *`). Returns the browser id, or -1 on failure.
+/// Callbacks run on the main thread. `cdp` requests on the control socket
+/// address the browser by `tab_id`.
 ///
 /// # Safety
 /// `parent_view` must be a live NSView and `url` a NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tiller_browser_create(
     context: c_int,
+    tab_id: c_int,
     parent_view: *mut c_void,
     width: c_int,
     height: c_int,
@@ -180,7 +182,7 @@ pub unsafe extern "C" fn tiller_browser_create(
     callbacks: browser::Callbacks,
 ) -> c_int {
     let url = unsafe { cstr(url) };
-    browser::create(context, parent_view, width, height, &url, callbacks)
+    browser::create(context, tab_id, parent_view, width, height, &url, callbacks)
 }
 
 /// # Safety
@@ -354,7 +356,15 @@ pub extern "C" fn tiller_browser_close(id: c_int) {
     browser::close(id);
 }
 
-/// Stops all callbacks for this browser. Call before freeing the callback context.
+/// Unloads a tab's browser to free its memory, unless its page is in use (see
+/// `browser::unload`). When it goes ahead, the `unload_ready` callback fires.
+#[unsafe(no_mangle)]
+pub extern "C" fn tiller_browser_unload(id: c_int) {
+    browser::unload(id);
+}
+
+/// Stops all callbacks for this browser and takes it away from its tab's id.
+/// Call before freeing the callback context.
 #[unsafe(no_mangle)]
 pub extern "C" fn tiller_browser_detach(id: c_int) {
     browser::detach(id);

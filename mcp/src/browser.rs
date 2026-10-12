@@ -7,7 +7,7 @@ use std::{
     io::{BufRead, BufReader, Write},
     os::unix::net::UnixStream,
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 /// How long navigate, new_tab and click wait for a page to finish loading.
@@ -160,17 +160,16 @@ impl Browser {
         }
     }
 
-    /// The given tab, or the selected one.
+    /// The given tab, or the selected one, loaded. A tab that wasn't loaded,
+    /// one restored at launch or unloaded to save memory, loads its page
+    /// first. Only this tab: listing every tab doesn't load them.
     fn resolve(&mut self, tab: Option<i64>) -> Result<i64, String> {
-        if let Some(tab) = tab {
-            return Ok(tab);
+        let info = self.request("tabs.resolve", json!({ "tab_id": tab }))?;
+        let id = info["id"].as_i64().ok_or("the app did not return a tab id")?;
+        if info["started"] == true {
+            self.wait_for_load(id)?;
         }
-        let list = self.request("tabs.list", json!({}))?;
-        list["tabs"]
-            .as_array()
-            .and_then(|tabs| tabs.iter().find(|t| t["selected"] == true))
-            .and_then(|t| t["id"].as_i64())
-            .ok_or_else(|| "no tab is open".to_string())
+        Ok(id)
     }
 
     /// Wakes the tab and returns its id. Background tabs are hidden, and
@@ -190,7 +189,7 @@ impl Browser {
 
     /// Waits until the tab stops loading, then returns its info. The app
     /// answers when the load ends, or once half a second passes with none
-    /// starting. A Tiller from before that request is polled instead.
+    /// starting.
     fn wait_for_load(&mut self, id: i64) -> Result<Value, String> {
         self.wait_for_load_within(id, 500)
     }
@@ -198,36 +197,7 @@ impl Browser {
     /// Like `wait_for_load`, giving a load `grace` milliseconds to start. A
     /// click or a submitted form may run script before it navigates.
     fn wait_for_load_within(&mut self, id: i64, grace: u64) -> Result<Value, String> {
-        match self.request("tabs.wait_load", json!({ "tab_id": id, "grace_ms": grace, "timeout_ms": LOAD_TIMEOUT.as_millis() as u64 })) {
-            Err(message) if message.starts_with("unknown method") => {}
-            other => return other,
-        }
-        self.poll_for_load(id)
-    }
-
-    /// Polls until the tab stops loading, then returns its info. A load that
-    /// hasn't started yet gets a second to show up.
-    fn poll_for_load(&mut self, id: i64) -> Result<Value, String> {
-        let start = Instant::now();
-        let mut seen_loading = false;
-        loop {
-            let list = self.request("tabs.list", json!({}))?;
-            let Some(info) = list["tabs"].as_array().and_then(|tabs| tabs.iter().find(|t| t["id"] == id)).cloned() else {
-                return Err(format!("tab {id} closed"));
-            };
-            let loading = info["loading"] == true;
-            seen_loading |= loading;
-            let settled = !loading && (seen_loading || start.elapsed() > Duration::from_secs(1));
-            if settled {
-                return Ok(info);
-            }
-            if start.elapsed() > LOAD_TIMEOUT {
-                let mut info = info;
-                info["note"] = json!("still loading after 30 seconds");
-                return Ok(info);
-            }
-            thread::sleep(Duration::from_millis(150));
-        }
+        self.request("tabs.wait_load", json!({ "tab_id": id, "grace_ms": grace, "timeout_ms": LOAD_TIMEOUT.as_millis() as u64 }))
     }
 
     fn mouse(&mut self, id: i64, kind: &str, x: f64, y: f64) -> Result<Value, String> {

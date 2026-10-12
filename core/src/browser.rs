@@ -31,10 +31,14 @@ pub struct Callbacks {
     pub copy_text: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
     pub status_changed: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
     pub fullscreen_changed: Option<unsafe extern "C" fn(*mut c_void, bool)>,
+    pub unload_ready: Option<unsafe extern "C" fn(*mut c_void)>,
 }
 
 struct Entry {
     browser: Browser,
+    /// The id of the tab the browser belongs to, which agents address it by
+    /// and which outlives the browser when the tab unloads. 0 once detached.
+    tab_id: i32,
     /// The profile's request context the browser runs in (see `create_context`).
     context: i32,
     callbacks: Option<Callbacks>,
@@ -47,13 +51,30 @@ struct Entry {
     /// URL fetches it again, since the first fetch may still be on its way
     /// and will be dropped as the old site's.
     icon_origin: String,
+    /// Closing for good, so an unload must not take over the close.
+    closing: bool,
+    /// Closing to unload: the tab stays, without its browser.
+    unloading: bool,
+    /// The page is using the camera or the microphone.
+    media_access: bool,
 }
 
 /// A DevTools call waiting for its result.
 struct PendingCall {
     browser_id: i32,
-    token: u64,
+    purpose: CallPurpose,
 }
+
+enum CallPurpose {
+    /// A control socket request, answered with the reply.
+    Socket(u64),
+    /// The check before an unload, of whether the page is playing media.
+    Unload,
+}
+
+/// True while the page plays something audible or shows picture in picture,
+/// which an unload would cut off.
+const MEDIA_PLAYING_JS: &str = "[...document.querySelectorAll('video, audio')].some(m => !m.paused && !m.ended && !m.muted && m.volume > 0) || !!document.pictureInPictureElement";
 
 /// Extension folders for `--load-extension`, comma-separated. Set once before
 /// CEF initializes.
@@ -99,6 +120,19 @@ pub fn get(id: i32) -> Option<Browser> {
     BROWSERS.with_borrow(|map| map.get(&id).map(|e| e.browser.clone()))
 }
 
+/// The browser of tab `tab_id`, while the tab has one.
+fn browser_for_tab(tab_id: i32) -> Option<i32> {
+    if tab_id <= 0 {
+        return None;
+    }
+    BROWSERS.with_borrow(|map| map.iter().find(|(_, e)| e.tab_id == tab_id).map(|(id, _)| *id))
+}
+
+/// Whether browser `id` is closing to unload rather than for good.
+fn is_unloading(id: i32) -> bool {
+    BROWSERS.with_borrow(|map| map.get(&id).is_some_and(|e| e.unloading))
+}
+
 fn callbacks_for(browser: Option<&mut Browser>) -> Option<Callbacks> {
     callbacks_for_id(browser?.identifier())
 }
@@ -116,6 +150,11 @@ fn tab_callbacks_for(browser: Option<&mut Browser>) -> Option<Callbacks> {
     }
     let opener = browser.host().map(|h| h.opener_identifier()).unwrap_or(0);
     callbacks_for_id(opener).or_else(|| BROWSERS.with_borrow(|map| map.values().find_map(|e| e.callbacks)))
+}
+
+/// Whether a native popup, such as a sign-in window, was opened by browser `id`.
+fn has_popup(id: i32) -> bool {
+    POPUPS.with_borrow(|map| map.values().any(|p| p.host().is_some_and(|h| h.opener_identifier() == id)))
 }
 
 fn close_popups() {
@@ -185,7 +224,7 @@ wrap_request_context_handler! {
     }
 }
 
-pub fn create(context_id: i32, parent_view: *mut c_void, width: i32, height: i32, url: &str, callbacks: Callbacks) -> i32 {
+pub fn create(context_id: i32, tab_id: i32, parent_view: *mut c_void, width: i32, height: i32, url: &str, callbacks: Callbacks) -> i32 {
     let Some(mut context) = context(context_id) else {
         return -1;
     };
@@ -210,21 +249,37 @@ pub fn create(context_id: i32, parent_view: *mut c_void, width: i32, height: i32
     BROWSERS.with_borrow_mut(|map| {
         map.insert(id, Entry {
             browser,
+            tab_id,
             context: context_id,
             callbacks: Some(callbacks),
             devtools: None,
             icon_url: None,
             icon_origin: String::new(),
+            closing: false,
+            unloading: false,
+            media_access: false,
         })
     });
     id
 }
 
-/// Stops callbacks into the Swift side, whose context may be freed soon.
+/// Stops callbacks into the Swift side, whose context may be freed soon, and
+/// takes the browser away from its tab's id.
 pub fn detach(id: i32) {
     BROWSERS.with_borrow_mut(|map| {
         if let Some(entry) = map.get_mut(&id) {
             entry.callbacks = None;
+            entry.tab_id = 0;
+        }
+    });
+}
+
+/// Marks browser `id` as closing for good, ending any unload under way.
+fn mark_closing(id: i32) {
+    BROWSERS.with_borrow_mut(|map| {
+        if let Some(entry) = map.get_mut(&id) {
+            entry.closing = true;
+            entry.unloading = false;
         }
     });
 }
@@ -232,7 +287,53 @@ pub fn detach(id: i32) {
 /// Starts closing one browser. The page's beforeunload runs first, then
 /// `close_ready` fires and the Swift side removes the tab's view.
 pub fn close(id: i32) {
+    mark_closing(id);
     if let Some(host) = get(id).and_then(|b| b.host()) {
+        host.close_browser(0);
+    }
+}
+
+/// Starts unloading browser `id` to free its memory, keeping its tab. Pages
+/// in use stay: ones with the camera or microphone, DevTools or a sign-in
+/// popup open, ones playing media, and ones whose beforeunload would ask to
+/// stay. Otherwise `unload_ready` fires and the Swift side removes the
+/// browser's view.
+pub fn unload(id: i32) {
+    let Some(host) = get(id).and_then(|b| b.host()) else { return };
+    let busy = BROWSERS.with_borrow(|map| map.get(&id).is_none_or(|e| e.closing || e.unloading || e.media_access));
+    if busy || host.has_dev_tools() != 0 || has_popup(id) || !attach_devtools(id, &host) {
+        return;
+    }
+    let message_id = next_message_id();
+    DEVTOOLS_CALLS.with_borrow_mut(|calls| calls.insert(message_id, PendingCall { browser_id: id, purpose: CallPurpose::Unload }));
+    let message = serde_json::json!({
+        "id": message_id,
+        "method": "Runtime.evaluate",
+        "params": { "expression": MEDIA_PLAYING_JS, "returnByValue": true },
+    })
+    .to_string();
+    if host.send_dev_tools_message(Some(message.as_bytes())) == 0 {
+        DEVTOOLS_CALLS.with_borrow_mut(|calls| calls.remove(&message_id));
+    }
+}
+
+/// The media check before an unload answered: unloads unless the page is
+/// playing something, the check failed, or the tab started closing meanwhile.
+fn media_checked(id: i32, reply: &[u8]) {
+    let playing = serde_json::from_slice::<serde_json::Value>(reply)
+        .ok()
+        .and_then(|v| v["result"]["result"]["value"].as_bool());
+    if playing != Some(false) {
+        return;
+    }
+    let start = BROWSERS.with_borrow_mut(|map| match map.get_mut(&id) {
+        Some(entry) if !entry.closing && !entry.media_access => {
+            entry.unloading = true;
+            true
+        }
+        _ => false,
+    });
+    if start && let Some(host) = get(id).and_then(|b| b.host()) {
         host.close_browser(0);
     }
 }
@@ -242,7 +343,15 @@ pub fn close(id: i32) {
 /// no browser exists.
 pub fn close_all() {
     // Collect first: closing can call back into handlers that borrow the map.
-    let browsers: Vec<Browser> = BROWSERS.with_borrow(|map| map.values().map(|e| e.browser.clone()).collect());
+    let browsers: Vec<Browser> = BROWSERS.with_borrow_mut(|map| {
+        map.values_mut()
+            .map(|e| {
+                e.closing = true;
+                e.unloading = false;
+                e.browser.clone()
+            })
+            .collect()
+    });
     if browsers.is_empty() && POPUPS.with_borrow(|map| map.is_empty()) {
         quit_message_loop();
         return;
@@ -255,30 +364,35 @@ pub fn close_all() {
     }
 }
 
+/// Attaches the DevTools observer to browser `id`, once. False if it can't be.
+fn attach_devtools(id: i32, host: &BrowserHost) -> bool {
+    if BROWSERS.with_borrow(|map| map.get(&id).is_some_and(|e| e.devtools.is_some())) {
+        return true;
+    }
+    // Attached outside the borrow: CEF may call back into the handlers.
+    let mut observer = TillerDevToolsObserver::new();
+    let registration = host.add_dev_tools_message_observer(Some(&mut observer));
+    BROWSERS.with_borrow_mut(|map| {
+        let Some(entry) = map.get_mut(&id) else { return false };
+        entry.devtools = registration;
+        entry.devtools.is_some()
+    })
+}
+
 /// Sends one DevTools protocol `message`, framed with `message_id` by the
-/// socket thread, to a tab of request context `context`. The reply answers
-/// the control socket request `token`, or an error does right away. A
-/// profile's socket reaches only its own tabs.
-pub fn devtools_send(context: i32, id: i32, message_id: i32, message: &str, token: u64) {
+/// socket thread, to tab `tab_id` of request context `context`. The reply
+/// answers the control socket request `token`, or an error does right away.
+/// A profile's socket reaches only its own tabs, and only loaded ones.
+pub fn devtools_send(context: i32, tab_id: i32, message_id: i32, message: &str, token: u64) {
+    let id = browser_for_tab(tab_id).unwrap_or(-1);
     let Some(host) = get(id).filter(|_| in_context(id, context)).and_then(|b| b.host()) else {
-        return ipc::reply_error(token, format!("no tab with id {id}"));
+        return ipc::reply_error(token, format!("no loaded tab with id {tab_id}"));
     };
-    let attached = BROWSERS.with_borrow(|map| map.get(&id).is_some_and(|e| e.devtools.is_some()));
-    if !attached {
-        // Attached outside the borrow: CEF may call back into the handlers.
-        let mut observer = TillerDevToolsObserver::new();
-        let registration = host.add_dev_tools_message_observer(Some(&mut observer));
-        let kept = BROWSERS.with_borrow_mut(|map| {
-            let Some(entry) = map.get_mut(&id) else { return false };
-            entry.devtools = registration;
-            entry.devtools.is_some()
-        });
-        if !kept {
-            return ipc::reply_error(token, "could not attach to the tab's DevTools agent");
-        }
+    if !attach_devtools(id, &host) {
+        return ipc::reply_error(token, "could not attach to the tab's DevTools agent");
     }
 
-    DEVTOOLS_CALLS.with_borrow_mut(|calls| calls.insert(message_id, PendingCall { browser_id: id, token }));
+    DEVTOOLS_CALLS.with_borrow_mut(|calls| calls.insert(message_id, PendingCall { browser_id: id, purpose: CallPurpose::Socket(token) }));
     if host.send_dev_tools_message(Some(message.as_bytes())) == 0 {
         DEVTOOLS_CALLS.with_borrow_mut(|calls| calls.remove(&message_id));
         ipc::reply_error(token, "DevTools message was rejected");
@@ -287,14 +401,20 @@ pub fn devtools_send(context: i32, id: i32, message_id: i32, message: &str, toke
 
 /// Drops the call waiting for `token`, whose requester gave up on it.
 pub fn forget_devtools_call(token: u64) {
-    DEVTOOLS_CALLS.with_borrow_mut(|calls| calls.retain(|_, c| c.token != token));
+    DEVTOOLS_CALLS.with_borrow_mut(|calls| calls.retain(|_, c| !matches!(c.purpose, CallPurpose::Socket(t) if t == token)));
 }
 
 /// Fails every DevTools call still waiting on a browser that is going away.
 fn fail_devtools_calls(browser_id: i32) {
     let tokens: Vec<u64> = DEVTOOLS_CALLS.with_borrow_mut(|calls| {
         let ids: Vec<i32> = calls.iter().filter(|(_, c)| c.browser_id == browser_id).map(|(id, _)| *id).collect();
-        ids.iter().filter_map(|id| calls.remove(id)).map(|c| c.token).collect()
+        ids.iter()
+            .filter_map(|id| calls.remove(id))
+            .filter_map(|c| match c.purpose {
+                CallPurpose::Socket(token) => Some(token),
+                CallPurpose::Unload => None,
+            })
+            .collect()
     });
     for token in tokens {
         ipc::reply_error(token, "the tab closed");
@@ -332,8 +452,29 @@ wrap_dev_tools_message_observer! {
             let Some(message) = message else { return 0 };
             let Some(id) = devtools_reply_id(message) else { return 0 };
             let Some(call) = DEVTOOLS_CALLS.with_borrow_mut(|calls| calls.remove(&id)) else { return 0 };
-            ipc::reply_devtools(call.token, message.to_vec());
+            match call.purpose {
+                CallPurpose::Socket(token) => ipc::reply_devtools(token, message.to_vec()),
+                // On the next turn: closing the browser from inside its
+                // DevTools observer would reenter CEF.
+                CallPurpose::Unload => {
+                    let mut task = MediaCheckedTask::new(call.browser_id, message.to_vec());
+                    post_task(ThreadId::UI, Some(&mut task));
+                }
+            }
             1
+        }
+    }
+}
+
+wrap_task! {
+    struct MediaCheckedTask {
+        browser_id: i32,
+        reply: Vec<u8>,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            media_checked(self.browser_id, &self.reply);
         }
     }
 }
@@ -372,6 +513,39 @@ wrap_client! {
 
         fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
             Some(TillerContextMenuHandler::new())
+        }
+
+        fn jsdialog_handler(&self) -> Option<JsdialogHandler> {
+            Some(TillerJsDialogHandler::new())
+        }
+    }
+}
+
+wrap_jsdialog_handler! {
+    struct TillerJsDialogHandler;
+
+    impl JsdialogHandler {
+        /// A page whose beforeunload asks to stay isn't unloaded: the unload
+        /// is called off without a prompt, and the tab keeps its page.
+        /// Closing for good shows Chromium's own prompt, as before.
+        fn on_before_unload_dialog(
+            &self,
+            browser: Option<&mut Browser>,
+            _message_text: Option<&CefString>,
+            _is_reload: i32,
+            callback: Option<&mut JsdialogCallback>,
+        ) -> i32 {
+            let Some(id) = browser.map(|b| b.identifier()) else { return 0 };
+            let unloading = BROWSERS.with_borrow_mut(|map| {
+                map.get_mut(&id).is_some_and(|e| std::mem::replace(&mut e.unloading, false))
+            });
+            if !unloading {
+                return 0;
+            }
+            if let Some(callback) = callback {
+                callback.cont(0, None);
+            }
+            1
         }
     }
 }
@@ -598,6 +772,17 @@ wrap_display_handler! {
             }
         }
 
+        /// The page started or stopped using the camera or microphone. A
+        /// call in a background tab mustn't be cut off by an unload.
+        fn on_media_access_change(&self, browser: Option<&mut Browser>, has_video_access: i32, has_audio_access: i32) {
+            let Some(id) = browser.map(|b| b.identifier()) else { return };
+            BROWSERS.with_borrow_mut(|map| {
+                if let Some(entry) = map.get_mut(&id) {
+                    entry.media_access = has_video_access != 0 || has_audio_access != 0;
+                }
+            });
+        }
+
         fn on_loading_progress_change(&self, browser: Option<&mut Browser>, progress: f64) {
             if let Some(cb) = callbacks_for(browser) && let Some(f) = cb.loading_progress {
                 unsafe { f(cb.ctx, progress) };
@@ -790,7 +975,16 @@ wrap_life_span_handler! {
         fn do_close(&self, browser: Option<&mut Browser>) -> i32 {
             // A browser of its own, such as the developer tools window or a
             // native popup, closes the usual way.
-            let Some(cb) = callbacks_for(browser) else { return 0 };
+            let Some(browser) = browser else { return 0 };
+            let id = browser.identifier();
+            let Some(cb) = callbacks_for_id(id) else { return 0 };
+            // An unload keeps the tab: Swift removes only the browser's view.
+            if is_unloading(id) {
+                if let Some(f) = cb.unload_ready {
+                    unsafe { f(cb.ctx) };
+                }
+                return 1;
+            }
             // A closed popup finishes tearing down only on the main window's
             // next redraw, so close popups while the last tab's view is still
             // up rather than after the window is gone.
@@ -818,9 +1012,14 @@ wrap_life_span_handler! {
             }
             fail_devtools_calls(id);
             let (entry, empty) = BROWSERS.with_borrow_mut(|map| (map.remove(&id), map.is_empty()));
+            let unloaded = entry.as_ref().is_some_and(|e| e.unloading);
             // Released outside the borrow: dropping the browser and its
             // DevTools registration can call back into the handlers.
             drop(entry);
+            // An unloaded tab is still open, so its browser going isn't a quit.
+            if unloaded {
+                return;
+            }
             // The last tab of the last window closing quits the app. Popups
             // left open close first, so no bare popup window lingers and CEF
             // never shuts down with a live browser.

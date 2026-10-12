@@ -74,7 +74,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "list_tabs",
-            "description": "Lists open tabs with their id, URL, title, loading state and which one is selected.",
+            "description": "Lists open tabs with their id, URL, title, loading state, whether the page is loaded and which one is selected. Tabs that aren't loaded (restored at launch or unloaded to save memory) load when a tool acts on them.",
             "inputSchema": { "type": "object", "properties": {} },
         },
         {

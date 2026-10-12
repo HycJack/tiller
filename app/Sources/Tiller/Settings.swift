@@ -67,6 +67,32 @@ enum TabLayout: String, CaseIterable {
     }
 }
 
+/// How long a background tab goes unused before it unloads.
+enum TabUnloadDelay: String, CaseIterable {
+    case fifteenMinutes = "15m"
+    case thirtyMinutes = "30m"
+    case oneHour = "1h"
+    case fourHours = "4h"
+
+    var displayName: String {
+        switch self {
+        case .fifteenMinutes: "15 Minutes"
+        case .thirtyMinutes: "30 Minutes"
+        case .oneHour: "1 Hour"
+        case .fourHours: "4 Hours"
+        }
+    }
+
+    var interval: TimeInterval {
+        switch self {
+        case .fifteenMinutes: 15 * 60
+        case .thirtyMinutes: 30 * 60
+        case .oneHour: 60 * 60
+        case .fourHours: 4 * 60 * 60
+        }
+    }
+}
+
 /// Light or dark for the chrome and for pages, which see it as
 /// `prefers-color-scheme`.
 enum Appearance: String, CaseIterable {
@@ -241,6 +267,18 @@ struct ProfileSettings: @unchecked Sendable {
             defaults.set(newValue.rawValue, forKey: "tabLayout")
             NotificationCenter.default.post(name: .tabLayoutDidChange, object: nil)
         }
+    }
+
+    /// Whether background tabs unload after `tabUnloadDelay` unused, and
+    /// sooner when the Mac runs short of memory. On unless turned off.
+    var unloadsInactiveTabs: Bool {
+        get { defaults.object(forKey: "unloadInactiveTabs") as? Bool ?? true }
+        nonmutating set { defaults.set(newValue, forKey: "unloadInactiveTabs") }
+    }
+
+    var tabUnloadDelay: TabUnloadDelay {
+        get { defaults.string(forKey: "tabUnloadDelay").flatMap(TabUnloadDelay.init) ?? .thirtyMinutes }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: "tabUnloadDelay") }
     }
 
     /// Whether the tab sidebar shows only icons.

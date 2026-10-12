@@ -20,12 +20,16 @@ protocol TabDelegate: AnyObject {
     func tab(_ tab: Tab, statusChanged text: String)
     /// The page asked for the whole screen, as a video player does, or gave it back.
     func tab(_ tab: Tab, fullscreenChanged fullscreen: Bool)
+    /// The tab's browser closed to save memory. The tab stays, and loads its
+    /// page again when started.
+    func tabDidUnload(_ tab: Tab)
 }
 
 extension TabDelegate {
     func tab(_ tab: Tab, autoResizedTo size: NSSize) {}
     func tab(_ tab: Tab, statusChanged text: String) {}
     func tab(_ tab: Tab, fullscreenChanged fullscreen: Bool) {}
+    func tabDidUnload(_ tab: Tab) {}
 }
 
 /// One CEF browser and the view that hosts it, in its profile's request
@@ -35,15 +39,29 @@ final class Tab {
     weak var delegate: TabDelegate?
     let hostView = BrowserHostView()
     let profile: ProfileContext
+    /// What agents and the `tiller` tool call the tab. Unlike `browserID`, it
+    /// stays the same while the tab waits to load or is unloaded.
+    let id: Int
+
+    private static var nextID = 1
 
     init(profile: ProfileContext) {
         self.profile = profile
+        id = Self.nextID
+        Self.nextID += 1
     }
 
+    /// -1 while there is no browser.
     private(set) var browserID: Int32 = -1
     /// Whether the browser exists. A tab restored from the last session waits
-    /// for its first selection, so a launch with many tabs loads only one page.
+    /// for its first selection, so a launch with many tabs loads only one page,
+    /// and an unloaded tab waits the same way.
     private(set) var isStarted = false
+    /// CEF's view in `hostView`. Removing it is what destroys the browser.
+    private var browserView: NSView?
+    /// When the tab was last in front, woken or used by an agent, for
+    /// unloading the ones left alone longest.
+    var lastActive = Date()
     private(set) var url = ""
     /// The last URL the page actually went to. `url` runs ahead of it while
     /// a load requested here is still on its way.
@@ -173,10 +191,18 @@ final class Tab {
             fullscreen_changed: { ctx, fullscreen in
                 guard let ctx else { return }
                 Tab.from(ctx).fullscreenChanged(fullscreen)
+            },
+            unload_ready: { ctx in
+                guard let ctx else { return }
+                Tab.from(ctx).unloadReady()
             }
         )
         let view = Unmanaged.passUnretained(hostView).toOpaque()
-        browserID = tiller_browser_create(profile.context, view, Int32(size.width), Int32(size.height), url, callbacks)
+        let before = Set(hostView.subviews.map(ObjectIdentifier.init))
+        browserID = tiller_browser_create(
+            profile.context, Int32(id), view, Int32(size.width), Int32(size.height), url, callbacks)
+        // CEF adds its view while creating the browser.
+        browserView = hostView.subviews.last { !before.contains(ObjectIdentifier($0)) }
         let dark = hostView.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         if dark && !isBlank {
             let cover = PaintCoverView(frame: hostView.bounds)
@@ -286,6 +312,39 @@ final class Tab {
         if browserID >= 0 { tiller_browser_detach(browserID) }
     }
 
+    /// Closes the browser to free its memory, keeping the tab, which loads
+    /// its page again when next started. Back and forward history, scroll
+    /// position and form contents go, as for a tab restored at launch. The
+    /// core leaves a page in use alone; otherwise `tabDidUnload` follows.
+    func unload() {
+        guard isStarted, browserID >= 0 else { return }
+        tiller_browser_unload(browserID)
+    }
+
+    /// The core agreed to unload: takes the browser's view away, which
+    /// destroys the browser, and puts the tab back to waiting.
+    private func finishUnload() {
+        guard isStarted, browserID >= 0 else { return }
+        tiller_browser_detach(browserID)
+        browserView?.removeFromSuperview()
+        browserView = nil
+        browserID = -1
+        isStarted = false
+        // The page the tab was on, not one it was still on its way to.
+        if !Self.isBlank(committedURL) { url = committedURL }
+        isLoading = false
+        progress = 1
+        canGoBack = false
+        canGoForward = false
+        paintWait?.cancel()
+        paintWait = nil
+        paintCover?.removeFromSuperview()
+        paintCover = nil
+        isLeavingBlank = false
+        delegate?.tabDidUnload(self)
+        delegate?.tabDidChange(self)
+    }
+
     // MARK: Callbacks from CEF, always on the main thread
 
     nonisolated private static func from(_ ctx: UnsafeMutableRawPointer) -> Tab {
@@ -360,6 +419,13 @@ final class Tab {
 
     nonisolated private func openTab(_ url: String, background: Bool) {
         MainActor.assumeIsolated { delegate?.tab(self, openInNewTab: url, background: background) }
+    }
+
+    nonisolated private func unloadReady() {
+        // As for a close, the view goes on the next turn of the run loop.
+        DispatchQueue.main.async { [self] in
+            MainActor.assumeIsolated { finishUnload() }
+        }
     }
 
     nonisolated private func closeReady() {

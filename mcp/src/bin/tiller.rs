@@ -231,12 +231,19 @@ fn run(args: Vec<String>) -> Result<(), Error> {
     Ok(())
 }
 
-/// `12  Title  https://…`, with `(loading)` while it loads.
+/// `12  Title  https://…`, with `(loading)` while it loads and `(not loaded)`
+/// while it waits to load.
 fn tab_line(tab: &Value) -> String {
     let title = tab["title"].as_str().unwrap_or_default();
     let url = tab["url"].as_str().unwrap_or_default();
-    let loading = if tab["loading"] == true { "  (loading)" } else { "" };
-    format!("{}  {title}  {url}{loading}", tab["id"])
+    let state = if tab["loaded"] == false {
+        "  (not loaded)"
+    } else if tab["loading"] == true {
+        "  (loading)"
+    } else {
+        ""
+    };
+    format!("{}  {title}  {url}{state}", tab["id"])
 }
 
 /// Title and URL, the text, then one line per element: `[3] button "Sign in"`.

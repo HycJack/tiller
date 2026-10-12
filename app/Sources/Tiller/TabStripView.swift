@@ -458,8 +458,11 @@ final class TabItemView: NSView {
         layer?.borderWidth = Theme.hairlineWidth
         layer?.borderColor = Theme.selectionOutline(selected: isSelected).layerColor
         // Unselected titles in secondary gray read as disabled; the weight
-        // alone marks the selected one.
-        titleLabel.textColor = .labelColor
+        // alone marks the selected one. A tab whose page isn't loaded,
+        // restored at launch or unloaded to save memory, is dimmed for that.
+        let dimmed = !tab.isStarted && !isSelected
+        titleLabel.textColor = dimmed ? .secondaryLabelColor : .labelColor
+        icon.alphaValue = dimmed ? 0.5 : 1
         // A compact tab only offers to close when it is the selected one, so a
         // pass of the mouse along a crowded row can't hit a close button.
         let showsClose = closesOnTrailing ? isHovered || isSelected : isHovered && (!isCompact || isSelected)

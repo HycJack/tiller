@@ -13,6 +13,8 @@ Tiller > Settings… (Cmd+,) opens the Settings of the front window's profile. I
 | General | At launch, open: Tabs from Last Time or Homepage | Tabs from Last Time | next launch |
 | General | New tabs open with: Blank Page or Homepage | Blank Page | next new tab |
 | General | Show tabs: Along the Top or In a Sidebar | Along the Top | right away |
+| General | Inactive tabs: Unload inactive tabs to save memory, also when the Mac runs low on memory (see [Unloading inactive tabs](browser.md#unloading-inactive-tabs)) | on | right away |
+| General | Unload after: 15 Minutes, 30 Minutes, 1 Hour or 4 Hours | 30 Minutes | within a minute |
 | General | Appearance: Match System, Light or Dark, for Tiller's windows and for pages, which see it as `prefers-color-scheme` | Match System | right away, for every profile |
 | General | Accent color: Match System, Graphite, Blue, Teal, Green, Orange or Pink, for Tiller's selections, chat bubbles, busy dots and the start page. Buttons, focus rings and text selection keep the system accent | Match System | right away, for every profile |
 | General | Search engine: Google, Bing, DuckDuckGo or Custom | Google | next search |

@@ -34,6 +34,9 @@ typedef struct TillerBrowserCallbacks {
     // The page asked for the whole screen (true), as a video player does, or
     // gave it back (false).
     void (*fullscreen_changed)(void *ctx, bool fullscreen);
+    // An unload passed its checks and beforeunload. Remove the browser's view
+    // to finish it; the tab stays.
+    void (*unload_ready)(void *ctx);
 } TillerBrowserCallbacks;
 
 // Static version string. Do not free.
@@ -80,9 +83,10 @@ void tiller_core_set_download_handler(void *ctx, TillerDownloadCallback handler)
 // Cancels a download still under way. The callback reports the change.
 void tiller_download_cancel(uint32_t id);
 
-// Creates a browser in request context `context`, filling `parent_view` (an
-// NSView *). Returns its id or -1.
-int tiller_browser_create(int context, void *parent_view, int width, int height, const char *url,
+// Creates a browser for tab `tab_id` in request context `context`, filling
+// `parent_view` (an NSView *). Returns its id or -1. `cdp` requests on the
+// control socket address it by `tab_id`.
+int tiller_browser_create(int context, int tab_id, void *parent_view, int width, int height, const char *url,
                         TillerBrowserCallbacks callbacks);
 void tiller_browser_load_url(int id, const char *url);
 void tiller_browser_go_back(int id);
@@ -138,7 +142,14 @@ void tiller_cookies_import(int context, const char *cookies_json, void *ctx,
 // close_ready fires.
 void tiller_browser_close(int id);
 
-// Stops callbacks for this browser. Call before freeing the callback context.
+// Unloads a tab's browser to free its memory. Does nothing while its page is
+// in use: using the camera or microphone, playing media, with DevTools or a
+// popup it opened still open, or asking to stay in beforeunload. Otherwise
+// unload_ready fires.
+void tiller_browser_unload(int id);
+
+// Stops callbacks for this browser and takes it away from its tab's id. Call
+// before freeing the callback context.
 void tiller_browser_detach(int id);
 
 // Starts a profile's control socket, which tiller_mcp connects to. `handler`

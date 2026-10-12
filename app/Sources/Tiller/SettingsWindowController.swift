@@ -425,6 +425,8 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
     private var launchPopUp: NSPopUpButton?
     private var newTabPopUp: NSPopUpButton?
     private var tabLayoutPopUp: NSPopUpButton?
+    private var unloadTabsButton: NSButton?
+    private var unloadDelayPopUp: NSPopUpButton?
     private var appearancePopUp: NSPopUpButton?
     private var accentPopUp: NSPopUpButton?
     private var remoteDebuggingButton: NSButton?
@@ -479,6 +481,21 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
         self.tabLayoutPopUp = tabLayoutPopUp
         addRow("Show tabs:", tabLayoutPopUp)
 
+        let unloadTabs = NSButton(
+            checkboxWithTitle: "Unload inactive tabs to save memory", target: self, action: #selector(unloadTabsChanged(_:))
+        )
+        unloadTabs.state = settings.unloadsInactiveTabs ? .on : .off
+        unloadTabsButton = unloadTabs
+        Self.linkLabel(of: addRow("Inactive tabs:", unloadTabs), to: unloadTabs)
+        let unloadDelayPopUp = Self.popUp(
+            TabUnloadDelay.allCases, title: \.displayName, selected: settings.tabUnloadDelay,
+            target: self, action: #selector(unloadDelayChanged(_:))
+        )
+        unloadDelayPopUp.isEnabled = settings.unloadsInactiveTabs
+        self.unloadDelayPopUp = unloadDelayPopUp
+        addRow("Unload after:", unloadDelayPopUp)
+        addNote(Self.note("Also when the Mac runs low on memory. An unloaded tab reloads when you select it."))
+
         let appearancePopUp = Self.popUp(
             Appearance.allCases, title: \.displayName, selected: Settings.appearance,
             target: self, action: #selector(appearanceChanged(_:))
@@ -511,7 +528,7 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
 
         // One width for them all, so their right edges line up; a longer
         // title can still widen its own.
-        for popUp in [launchPopUp, newTabPopUp, tabLayoutPopUp, appearancePopUp, accentPopUp, searchPopUp] {
+        for popUp in [launchPopUp, newTabPopUp, tabLayoutPopUp, unloadDelayPopUp, appearancePopUp, accentPopUp, searchPopUp] {
             popUp.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.popUpWidth).isActive = true
         }
 
@@ -545,6 +562,9 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
         launchPopUp?.selectItem(at: LaunchTabs.allCases.firstIndex(of: settings.launchTabs) ?? 0)
         newTabPopUp?.selectItem(at: NewTabPage.allCases.firstIndex(of: settings.newTabPage) ?? 0)
         tabLayoutPopUp?.selectItem(at: TabLayout.allCases.firstIndex(of: settings.tabLayout) ?? 0)
+        unloadTabsButton?.state = settings.unloadsInactiveTabs ? .on : .off
+        unloadDelayPopUp?.selectItem(at: TabUnloadDelay.allCases.firstIndex(of: settings.tabUnloadDelay) ?? 0)
+        unloadDelayPopUp?.isEnabled = settings.unloadsInactiveTabs
         appearancePopUp?.selectItem(at: Appearance.allCases.firstIndex(of: Settings.appearance) ?? 0)
         accentPopUp?.selectItem(at: AccentTheme.allCases.firstIndex(of: Settings.accentTheme) ?? 0)
         remoteDebuggingButton?.state = Settings.remoteDebuggingEnabled ? .on : .off
@@ -593,6 +613,16 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
     @objc private func tabLayoutChanged(_ sender: NSPopUpButton) {
         guard let layout = (sender.selectedItem?.representedObject as? String).flatMap(TabLayout.init) else { return }
         settings.tabLayout = layout
+    }
+
+    @objc private func unloadTabsChanged(_ sender: NSButton) {
+        settings.unloadsInactiveTabs = sender.state == .on
+        unloadDelayPopUp?.isEnabled = sender.state == .on
+    }
+
+    @objc private func unloadDelayChanged(_ sender: NSPopUpButton) {
+        guard let delay = (sender.selectedItem?.representedObject as? String).flatMap(TabUnloadDelay.init) else { return }
+        settings.tabUnloadDelay = delay
     }
 
     @objc private func appearanceChanged(_ sender: NSPopUpButton) {

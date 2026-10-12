@@ -23,7 +23,15 @@ Tabs share the row equally. When there are too many for their titles, they show 
 
 Settings > General > Show tabs, or View > Show Tab Sidebar, moves the tabs into a sidebar on the left. The address bar then takes their place in the toolbar, and the page sits as a card between the sidebar and the agent panel. A New Tab row follows the last tab, and the list scrolls when it is longer than the window. Drag the sidebar's edge to resize it, between 80 and 400 points. The button at its top, or View > Collapse Tab Sidebar (Ctrl+Cmd+S), collapses it to icons and expands it again. The width and the collapsed state are kept per profile.
 
-Tiller saves its open tabs as they change and opens them again at the next launch, whether it quit through Cmd+Q, a closed window, a closed last tab or a crash. Each tab reloads its last URL when you first select it, so a launch with many tabs loads only the one in front. Listing the tabs from an agent or the `tiller` tool loads them all. Back/forward history, scroll position and form contents aren't kept. A session of only blank tabs opens the homepage instead. Tabs are still saved when Settings says to open the homepage, so switching back restores the last run's tabs.
+Tiller saves its open tabs as they change and opens them again at the next launch, whether it quit through Cmd+Q, a closed window, a closed last tab or a crash. Each tab reloads its last URL when you first select it, or when an agent or the `tiller` tool acts on it, so a launch with many tabs loads only the one in front. Back/forward history, scroll position and form contents aren't kept.
+
+### Unloading inactive tabs
+
+To save memory, a background tab left unused for 30 minutes unloads: its page closes, along with the memory it held, but the tab stays where it is, with its title and icon, and loads its page again when you select it. A tab that isn't loaded, whether unloaded or restored at launch and not yet selected, shows a dimmed title and icon. When the Mac runs low on memory, the background tabs unused longest unload sooner, and all of them when memory is critically low.
+
+The tab in front stays, as do tabs an agent is using, a page that has the screen, and pages that are in use: ones playing audio or video in the page itself or picture in picture, using the camera or microphone, with Developer Tools open, with a sign-in popup open, or that would ask before you leave, such as an editor with unsaved changes. Media playing inside a frame from another site, such as an embedded video, doesn't count, so its tab may still unload. An unloaded tab loses its back/forward history, scroll position and form contents, as a restored tab does.
+
+Settings > General > Inactive tabs turns this off, and Unload after sets the delay: 15 minutes, 30 minutes, 1 hour or 4 hours. A session of only blank tabs opens the homepage instead. Tabs are still saved when Settings says to open the homepage, so switching back restores the last run's tabs.
 
 The last 25 closed tabs are kept for Cmd+Shift+T, across restarts too. Tabs that close because the window closed or Tiller quit aren't among them, since they come back at launch. Clear History… forgets them.
 
