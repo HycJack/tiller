@@ -48,7 +48,7 @@ Both are stored in `session.json` in the [profile's folder](settings-and-data.md
 
 New tabs go right after the tab they came from. The same clicks work on the start page's tiles and the address bar's suggestions. In the address bar, Cmd+Return opens what you typed in a new selected tab and Cmd+Shift+Return opens it behind the current one.
 
-Script popup windows (`window.open` with a size, as sign-in flows use) open as native Chromium windows, preserving `window.opener` so sign-in flows can return their result to the original page. `target=_blank` links still open as new tabs. Native popups are not listed in the tab strip or browser tools and are not restored between launches. They have no address bar, so the sign-in page's site isn't shown. Quitting, or closing the last tab, closes them too.
+Script popup windows (`window.open` with a size, as sign-in flows use) open as native Chromium windows, preserving `window.opener` so sign-in flows can return their result to the original page. `target=_blank` links and `window.open` without a size open as new tabs; `window.open` returns the tab's window, so a page can open a blank tab and navigate it afterwards. Native popups are not listed in the tab strip or browser tools and are not restored between launches. They have no address bar, so the sign-in page's site isn't shown. Quitting, or closing the last tab, closes them too.
 
 ## Pages
 

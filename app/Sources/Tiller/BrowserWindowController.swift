@@ -253,7 +253,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     @discardableResult
     private func openTab(
         url: String, select: Bool, at index: Int? = nil, restoring saved: SessionStore.SavedTab? = nil,
-        lazily: Bool = false
+        lazily: Bool = false, adopting: Bool = false
     ) -> Tab {
         closingAll = false
         let tab = Tab(profile: profile)
@@ -272,7 +272,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             tab.prepare(url: url, title: saved?.title ?? "")
             return tab
         }
-        tab.start(url: url, title: saved?.title ?? "")
+        if adopting { tab.adoptPopup(url: url) } else { tab.start(url: url, title: saved?.title ?? "") }
 
         if select {
             self.select(tab)
@@ -555,6 +555,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     func tab(_ tab: Tab, openInNewTab url: String, background: Bool) {
         openTab(url: url, select: !background, at: tabs.firstIndex { $0 === tab }.map { $0 + 1 })
+    }
+
+    func tab(_ tab: Tab, openPopup url: String, background: Bool) -> Tab? {
+        openTab(url: url, select: !background, at: tabs.firstIndex { $0 === tab }.map { $0 + 1 }, adopting: true)
     }
 
     func tab(_ tab: Tab, statusChanged text: String) {
