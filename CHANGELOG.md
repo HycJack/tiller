@@ -7,6 +7,8 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+## 0.2.2
+
 - `window.open` without a size returns the new tab's window, so a page
   can open a blank tab and send it somewhere afterwards.
 - With no recently closed tabs below them, the start page's tiles sit
