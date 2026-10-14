@@ -603,7 +603,7 @@ final class ScheduleEditorController: NSViewController, NSTextViewDelegate, NSTe
     @objc private func chooseModel(_ sender: NSButton) {
         let kind = kind
         AgentModelMenu.popUp(
-            below: sender, kind: kind, profile: profile, options: modelOptions ?? profile.settings.agentModelOptions(for: kind)
+            from: sender, kind: kind, profile: profile, options: modelOptions ?? profile.settings.agentModelOptions(for: kind)
         ) { [weak self] options in
             self?.modelOptions = options
             self?.showModelOptions()

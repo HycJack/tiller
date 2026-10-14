@@ -49,6 +49,18 @@ struct AgentModelOptions: Codable, Equatable {
         if fast { parts.append("fast") }
         return parts.joined(separator: " · ")
     }
+
+    /// The model's name, and its effort when set, for the message field's
+    /// model button: `Opus · high`. The CLI's own model goes by its name
+    /// when the CLI has said which it is.
+    @MainActor
+    func shortTitle(for kind: AgentChoice) -> String {
+        let fallback = kind.provider == nil && kind.kind == .codex ? AgentModelCatalog.codexModel(nil)?.name : nil
+        var parts = [model.map { kind.modelName($0) } ?? fallback ?? "Default model"]
+        if let effort { parts.append(effort) }
+        if fast { parts.append("fast") }
+        return parts.joined(separator: " · ")
+    }
 }
 
 /// A model a CLI offers. Codex says which efforts and service tiers each
@@ -315,10 +327,11 @@ final class AgentModelMenu: NSObject {
     /// The menu stays with the items' targets while it is open.
     private static var current: AgentModelMenu?
 
-    /// Pops the menu up just below `view`. `locked` greys every choice out,
-    /// with `note` saying why; `note` otherwise goes at the bottom.
+    /// Pops the menu up just below `view`, or with `above` just above it.
+    /// `locked` greys every choice out, with `note` saying why; `note`
+    /// otherwise goes at the bottom.
     static func popUp(
-        below view: NSView, kind: AgentChoice, profile: ProfileContext, options: AgentModelOptions, locked: Bool = false,
+        from view: NSView, above: Bool = false, kind: AgentChoice, profile: ProfileContext, options: AgentModelOptions, locked: Bool = false,
         note: String? = nil, onChange: @escaping (AgentModelOptions) -> Void
     ) {
         if kind.provider == nil { AgentModelCatalog.refresh(kind.kind, profile: profile) }
@@ -332,6 +345,7 @@ final class AgentModelMenu: NSObject {
             controller, selector: #selector(modelsChanged(_:)), name: .agentModelsDidChange, object: nil
         )
         let menu = controller.menu
+        if above { return menu.popUp(above: view) }
         let below = view.isFlipped ? view.bounds.maxY + 4 : view.bounds.minY - 4
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: below), in: view)
     }

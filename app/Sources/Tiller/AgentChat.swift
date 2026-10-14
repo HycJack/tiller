@@ -10,6 +10,9 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     var context: (() -> String)?
     /// Called when the title, status or agent changes, or a turn starts or ends.
     var onChange: (() -> Void)?
+    /// Get the message field's model or tools button, to show the menu from.
+    var onModel: ((NSView) -> Void)?
+    var onTools: ((NSView) -> Void)?
 
     let id: String
     /// Nil until the first message.
@@ -300,6 +303,10 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         composer.sendButton.action = #selector(sendOrStop(_:))
         composer.addButton.target = self
         composer.addButton.action = #selector(showAddMenu(_:))
+        composer.modelButton.target = self
+        composer.modelButton.action = #selector(showModel(_:))
+        composer.toolsButton.target = self
+        composer.toolsButton.action = #selector(showTools(_:))
         composer.textView.onKeyDown = { [weak self] event in
             guard let self, PromptSearch.isSearchKey(event) else { return false }
             self.searchPrompts()
@@ -506,9 +513,7 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         if isBusy { setStatus("Stopping…", busy: true) }
     }
 
-    private var composerIsEmpty: Bool {
-        composer.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && composer.attachments.isEmpty
-    }
+    private var composerIsEmpty: Bool { composer.isEmpty }
 
     /// Enter sends, or queues while a turn runs. Ctrl+Enter stops the turn
     /// and sends right away. Option+Enter or Shift+Enter adds a line. Escape
@@ -647,13 +652,32 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         search.target = self
         search.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)
         search.isEnabled = !profile.agentHistory.prompts.isEmpty
-        // Just below the button, as the tools menu opens. It moves up when
-        // the screen runs out, as it does for a field at the window's bottom.
-        let below = sender.isFlipped ? sender.bounds.maxY + 4 : sender.bounds.minY - 4
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: below), in: sender)
+        // Above the button, as the model and tools menus open.
+        menu.popUp(above: sender)
     }
 
     @objc private func searchSent(_ sender: Any?) { searchPrompts() }
+
+    // MARK: Model and tools
+
+    /// Puts this chat's model and tools on the message field's buttons.
+    func showOptions() {
+        let options = modelOptions
+        composer.showOptions(
+            model: options.shortTitle(for: choice), summary: options.summary(for: choice), isDefault: options.isDefault,
+            tools: tools
+        )
+    }
+
+    @objc private func showModel(_ sender: NSButton) { onModel?(sender) }
+    @objc private func showTools(_ sender: NSButton) { onTools?(sender) }
+
+    #if DEBUG
+    /// Clicks the model or tools button for `ui.agentAction`, so what opens
+    /// hangs off that button, as it does for a real click.
+    func modelForTesting() { onModel?(composer.modelButton) }
+    func toolsForTesting() { onTools?(composer.toolsButton) }
+    #endif
 
     // MARK: Queue
 

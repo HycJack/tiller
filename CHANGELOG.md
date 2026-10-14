@@ -7,6 +7,12 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+- The agent's message field is redesigned: the text spans the field's
+  full width above a row of controls, with the add button, the chat's
+  model by name, the tools and a new round send button that turns into
+  a stop button while a turn runs. The model and tools menus open from
+  the field, above it, and while the agent works the hint says what you
+  write is queued. The new tab button sits right after the tab numbers.
 - Agents hand getting somewhere or setting something up on a page, such
   as opening a story's comments, filling a search form or setting
   filters, to TypeSafe's Jev with the new `run_task` tool, or
