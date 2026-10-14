@@ -70,6 +70,12 @@ fn main() -> io::Result<()> {
                 let name = req["params"]["name"].as_str().unwrap_or_default();
                 let args = req["params"].get("arguments").cloned().unwrap_or_else(|| json!({}));
                 Ok(match browser.call_tool(name, &args) {
+                    // A line on how it went first: what the agent reads
+                    // before the steps, and what the chat shows of it.
+                    Ok(Output::Json(value)) if name == "run_task" => {
+                        let text = format!("{}\n{value}", tiller_mcp::jev::summary(&value));
+                        json!({ "content": [{ "type": "text", "text": text }] })
+                    }
                     Ok(output) => json!({ "content": content(output) }),
                     Err(message) => json!({ "content": [{ "type": "text", "text": message }], "isError": true }),
                 })

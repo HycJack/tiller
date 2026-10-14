@@ -459,6 +459,8 @@ final class ToolRowView: NSView, TranscriptRow {
     private let chevron: NSImageView?
     private var detail: String
     private var heading: NSAttributedString
+    /// What a running run_task is doing now, under its goal.
+    private var progress: String?
 
     /// `detail` is what `detail(_:)` made of the call's input, and `full`
     /// what `full(_:detail:)` did. A `finished` row, as a saved chat's are,
@@ -545,10 +547,33 @@ final class ToolRowView: NSView, TranscriptRow {
     /// they follow the name on one line, cut at its end.
     private func showHeading() {
         let running = outcome == .running && chevron == nil && !detail.isEmpty
-        label.attributedStringValue = running ? Self.heading(tool: tool, detail: detail, separator: "\n") : heading
+        let text = NSMutableAttributedString(attributedString: running ? Self.heading(tool: tool, detail: detail, separator: "\n") : heading)
+        if running, let progress {
+            text.append(Self.subline(progress, color: Theme.accentColor))
+        }
+        label.attributedStringValue = text
         label.lineBreakMode = running ? .byCharWrapping : .byTruncatingTail
-        label.maximumNumberOfLines = running ? 4 : 1
+        label.maximumNumberOfLines = running ? (progress == nil ? 4 : 5) : 1
         label.invalidateIntrinsicContentSize()
+    }
+
+    /// A line under the heading: a run_task's step, or how it ended.
+    private static func subline(_ text: String, color: NSColor) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        return NSAttributedString(string: "\n" + text, attributes: [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: color,
+            .paragraphStyle: paragraph,
+        ])
+    }
+
+    /// What a running run_task is doing, from the window's reports of it.
+    func showProgress(_ text: String) {
+        guard outcome == .running, progress != text else { return }
+        progress = text
+        showHeading()
+        setAccessibilityValue(text)
     }
 
     /// A group header spins only while one of its calls runs; between
@@ -573,11 +598,14 @@ final class ToolRowView: NSView, TranscriptRow {
         icon.isHidden = false
         isHovered = false
         // Only a failure gets a color: a long run would otherwise be a
-        // column of green.
-        let (symbol, description, color): (String, String, NSColor) = switch isError {
-        case true?: ("xmark.circle.fill", "Failed", .systemRed)
-        case false?: ("checkmark.circle.fill", "Done", .tertiaryLabelColor)
-        case nil: ("minus.circle.fill", "Didn't finish", .tertiaryLabelColor)
+        // column of green. A run_task that ended short of its goal still
+        // succeeded as a call, and gets a warning.
+        let ending = isError == false && tool == "run_task" ? Self.taskEnding(summary) : nil
+        let (symbol, description, color): (String, String, NSColor) = switch (isError, ending) {
+        case (_, (let symbol, let description, let color)?): (symbol, description, color)
+        case (true?, _): ("xmark.circle.fill", "Failed", .systemRed)
+        case (false?, _): ("checkmark.circle.fill", "Done", .tertiaryLabelColor)
+        case (nil, _): ("minus.circle.fill", "Didn't finish", .tertiaryLabelColor)
         }
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
@@ -597,8 +625,28 @@ final class ToolRowView: NSView, TranscriptRow {
             label.attributedStringValue = text
             label.maximumNumberOfLines = 3
             label.invalidateIntrinsicContentSize()
+        } else if let ending, !summary.isEmpty {
+            let text = NSMutableAttributedString(attributedString: heading)
+            text.append(Self.subline(summary, color: ending.color == .tertiaryLabelColor ? .secondaryLabelColor : ending.color))
+            label.attributedStringValue = text
+            label.maximumNumberOfLines = 2
+            label.toolTip = [toolTip, summary].compactMap { $0 }.joined(separator: "\n\n")
+            label.invalidateIntrinsicContentSize()
         }
+        progress = nil
         onFinish?()
+    }
+
+    /// The mark for how a run_task ended, from its result's first line:
+    /// tiller_mcp's summary, such as "Done in 2.4 s, 5 steps".
+    static func taskEnding(_ summary: String) -> (symbol: String, description: String, color: NSColor)? {
+        if summary.hasPrefix("Done") { return ("checkmark.circle.fill", "Done", .tertiaryLabelColor) }
+        if summary.hasPrefix("Blocked") || summary.hasPrefix("Out of steps") {
+            return ("exclamationmark.triangle.fill", "Didn't get there", .systemOrange)
+        }
+        if summary.hasPrefix("Stopped") { return ("stop.circle.fill", "Stopped", .tertiaryLabelColor) }
+        if summary.hasPrefix("Error") { return ("xmark.circle.fill", "Failed", .systemRed) }
+        return nil
     }
 
     // Clicks anywhere on a disclosure row toggle it, the label included.

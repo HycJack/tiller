@@ -92,6 +92,11 @@ enum JevControl {
         case "jev.status":
             // Whether tiller_mcp offers run_task, and whether it can type.
             return ["status": JevKey.status(profile: profile.id).rawValue]
+        case "jev.progress":
+            // How a run is going, for the window to show; answers whether
+            // the user pressed Stop.
+            guard let window = profile.window else { return ["stop": false] }
+            return try window.control(method, params: params)
         case "jev.decide":
             guard let key = JevKey.typesafe.read(profile: profile.id) else {
                 throw ControlError("run_task needs a TypeSafe API key; the user can add one in Tiller's Settings > Jev")
@@ -106,28 +111,89 @@ enum JevControl {
             guard let system = params["system"] as? String, let user = params["user"] as? String else {
                 throw ControlError("jev.text needs system and user messages")
             }
-            var base = settings.jevTextBaseURL
-            while base.hasSuffix("/") { base.removeLast() }
-            guard let url = URL(string: base + "/chat/completions"), ["https", "http"].contains(url.scheme) else {
-                throw ControlError("the text model URL in Settings > Jev isn't a web address: \(base)")
-            }
-            var body: [String: Any] = [
-                "model": settings.jevTextModel,
-                "max_tokens": 1024,
-                "response_format": ["type": "json_object"],
-                "messages": [["role": "system", "content": system], ["role": "user", "content": user]],
-            ]
-            // DeepSeek's own API turns thinking on and off its own way;
-            // OpenRouter and most others take `reasoning`.
-            if url.host?.hasSuffix("deepseek.com") == true {
-                body["thinking"] = ["type": settings.jevTextReasoning ? "enabled" : "disabled"]
-            } else {
-                body["reasoning"] = settings.jevTextReasoning ? ["effort": "low"] : ["enabled": false]
-            }
-            return try post(url, key: key, body: body)
+            let url = try textURL(settings)
+            return try post(url, key: key, body: textBody(settings, url: url, system: system, user: user))
         default:
             throw ControlError("unknown method \(method)")
         }
+    }
+
+    /// The text model's chat completions address, from Settings > Jev.
+    nonisolated private static func textURL(_ settings: ProfileSettings) throws -> URL {
+        var base = settings.jevTextBaseURL
+        while base.hasSuffix("/") { base.removeLast() }
+        guard let url = URL(string: base + "/chat/completions"), ["https", "http"].contains(url.scheme) else {
+            throw ControlError("the text model URL in Settings > Jev isn't a web address: \(base)")
+        }
+        return url
+    }
+
+    nonisolated private static func textBody(_ settings: ProfileSettings, url: URL, system: String, user: String, maxTokens: Int = 1024) -> [String: Any] {
+        var body: [String: Any] = [
+            "model": settings.jevTextModel,
+            "max_tokens": maxTokens,
+            "response_format": ["type": "json_object"],
+            "messages": [["role": "system", "content": system], ["role": "user", "content": user]],
+        ]
+        // DeepSeek's own API turns thinking on and off its own way;
+        // OpenRouter and most others take `reasoning`.
+        if url.host?.hasSuffix("deepseek.com") == true {
+            body["thinking"] = ["type": settings.jevTextReasoning ? "enabled" : "disabled"]
+        } else {
+            body["reasoning"] = settings.jevTextReasoning ? ["effort": "low"] : ["enabled": false]
+        }
+        return body
+    }
+
+    /// How a check of one key went: the round trip, or why it failed.
+    typealias CheckResult = Result<Duration, ControlError>
+
+    /// Settings > Jev's Check Keys: one small request to each model whose
+    /// key is set, sent together. Nil for a key that isn't set.
+    static func check(profile: ProfileContext) async -> (typesafe: CheckResult?, text: CheckResult?) {
+        let settings = profile.settings
+        let (url, model) = (decideURL, settings.jevModel)
+        let (typesafeKey, textKey) = (JevKey.typesafe.read(profile: profile.id), JevKey.text.read(profile: profile.id))
+        async let typesafe = checkTypeSafe(key: typesafeKey, url: url, model: model)
+        async let text = checkText(key: textKey, settings: settings)
+        return await (typesafe, text)
+    }
+
+    /// One operation question with two choices, on a page with nothing on it.
+    nonisolated private static func checkTypeSafe(key: String?, url: URL, model: String) async -> CheckResult? {
+        guard let key else { return nil }
+        let body: [String: Any] = [
+            "model": model,
+            "state": [
+                "page": ["url": "about:blank", "title": "Tiller", "text": "Tiller is checking its connection."],
+                "elements": [Any](),
+                "recent_actions": [Any](),
+            ],
+            "questions": ["operation": [
+                "type": "choice",
+                "criteria": ["DONE": "Every requirement is visibly satisfied.", "BLOCKED": "No supported operation can progress."],
+                "instructions": ["goal": "Check that the connection works."],
+            ]],
+        ]
+        return await timed(url, key: key, body: body)
+    }
+
+    nonisolated private static func checkText(key: String?, settings: ProfileSettings) async -> CheckResult? {
+        guard let key else { return nil }
+        do {
+            let url = try textURL(settings)
+            let body = textBody(settings, url: url, system: "Return the JSON object {\"text\": \"ok\"}.", user: "Check", maxTokens: 16)
+            return await timed(url, key: key, body: body)
+        } catch {
+            return .failure(error as? ControlError ?? ControlError(error.localizedDescription))
+        }
+    }
+
+    nonisolated private static func timed(_ url: URL, key: String, body: [String: Any]) async -> CheckResult {
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return .failure(ControlError("couldn't write the request")) }
+        let clock = ContinuousClock()
+        let start = clock.now
+        return await send(url, key: key, body: data).map { _ in clock.now - start }
     }
 
     private static func post(_ url: URL, key: String, body: [String: Any]) throws -> ControlDeferred {
@@ -181,32 +247,50 @@ enum JevControl {
 
 // MARK: Settings
 
-/// Settings > Jev: the keys and models run_task uses.
+/// Settings > Jev: the keys and models run_task uses, whether agents get
+/// it, and a check that the keys work.
 final class JevSettingsPane: SettingsPane, NSTextFieldDelegate {
     private let typesafeKeyField = NSSecureTextField()
     private let modelField = NSTextField()
     private let textURLField = NSTextField()
     private let textModelField = NSTextField()
     private let textKeyField = NSSecureTextField()
+    private let statusDot = NSView()
+    private let statusLabel = NSTextField(labelWithString: "")
+    private let statusNote = SettingsPane.note()
+    private let checkButton = NSButton(title: "Check Keys", target: nil, action: nil)
+    private let checkResult = SettingsPane.note()
+    private var checking: Task<Void, Never>?
 
     init(profile: ProfileContext) { super.init(title: "Jev", profile: profile) }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override func buildRows() {
-        let intro = Self.note(
-            "Agents call run_task to hand a short task on one page, such as filling a search form, to TypeSafe's Jev, "
-                + "which picks each click and field quickly. A small text model writes what goes in the fields."
-        )
-        intro.lineBreakMode = .byWordWrapping
-        intro.maximumNumberOfLines = 3
-        intro.preferredMaxLayoutWidth = Self.controlWidth
+        let intro = Self.wrapping(Self.note(
+            "Agents call run_task to hand a task on one page, such as filling a search form, to TypeSafe's Jev, "
+                + "which picks each click in a few hundred milliseconds. A small text model writes the fields' values."
+        ), lines: 4)
         grid.addRow(with: [NSGridCell.emptyContentView, intro]).bottomPadding = 8
+
+        statusDot.wantsLayer = true
+        statusDot.layer?.cornerRadius = 4
+        statusDot.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            statusDot.widthAnchor.constraint(equalToConstant: 8),
+            statusDot.heightAnchor.constraint(equalToConstant: 8),
+        ])
+        statusLabel.font = .systemFont(ofSize: Theme.FontSize.body, weight: .semibold)
+        let status = NSStackView(views: [statusDot, statusLabel])
+        status.spacing = 6
+        status.alignment = .centerY
+        addRow("Status:", status)
+        addNote(Self.wrapping(statusNote, lines: 2))
 
         typesafeKeyField.stringValue = JevKey.typesafe.read(profile: profile.id) ?? ""
         typesafeKeyField.placeholderString = "Required for run_task"
         addRow("TypeSafe API key:", Self.fixWidth(typesafeKeyField))
-        addNote(Self.note("From typesafe.ai. Kept in the Keychain."))
+        addLinkNote(Self.noteWithLink("Kept in the Keychain.", link: "Get a key", url: "https://typesafe.ai", target: self))
 
         modelField.stringValue = settings.jevModelSetting
         modelField.placeholderString = ProfileSettings.defaultJevModel
@@ -224,6 +308,7 @@ final class JevSettingsPane: SettingsPane, NSTextFieldDelegate {
         textKeyField.stringValue = JevKey.text.read(profile: profile.id) ?? ""
         textKeyField.placeholderString = "Required to type into fields"
         addRow("Text model key:", Self.fixWidth(textKeyField))
+        addLinkNote(Self.noteWithLink("Kept in the Keychain.", link: "OpenRouter keys", url: "https://openrouter.ai/settings/keys", target: self))
 
         let reasoning = NSButton(
             checkboxWithTitle: "Let the text model think first", target: self, action: #selector(reasoningChanged(_:))
@@ -232,22 +317,115 @@ final class JevSettingsPane: SettingsPane, NSTextFieldDelegate {
         Self.linkLabel(of: addRow("Reasoning:", reasoning), to: reasoning)
         addNote(Self.note("Slower, and rarely needed for a field's value."))
 
-        let restart = Self.note("Agents get run_task from their next start: a new chat, or the next message after one stops.")
-        restart.lineBreakMode = .byWordWrapping
-        restart.maximumNumberOfLines = 2
-        restart.preferredMaxLayoutWidth = Self.controlWidth
-        grid.addRow(with: [NSGridCell.emptyContentView, restart]).topPadding = 8
+        checkButton.target = self
+        checkButton.action = #selector(checkKeys(_:))
+        checkButton.bezelStyle = .push
+        checkButton.controlSize = .regular
+        checkResult.lineBreakMode = .byTruncatingTail
+        let check = NSStackView(views: [checkButton, checkResult])
+        check.spacing = 8
+        check.alignment = .firstBaseline
+        check.widthAnchor.constraint(equalToConstant: Self.controlWidth).isActive = true
+        grid.addRow(with: [NSGridCell.emptyContentView, check]).topPadding = 4
 
-        let privacy = Self.note(
+        let restart = Self.wrapping(Self.note(
+            "Agents get run_task from their next start: a new chat, or the next message after one stops. "
+                + "While it works, the page shows each step, with a Stop button."
+        ), lines: 3)
+        grid.addRow(with: [NSGridCell.emptyContentView, restart]).topPadding = 12
+
+        let privacy = Self.wrapping(Self.note(
             "run_task sends the goal and the visible text of the page it works on to TypeSafe, and to the text model when it types."
-        )
-        privacy.lineBreakMode = .byWordWrapping
-        privacy.maximumNumberOfLines = 2
-        privacy.preferredMaxLayoutWidth = Self.controlWidth
-        grid.addRow(with: [NSGridCell.emptyContentView, privacy]).topPadding = 8
+        ), lines: 2)
+        grid.addRow(with: [NSGridCell.emptyContentView, privacy]).topPadding = 6
 
         for field in [typesafeKeyField, modelField, textURLField, textModelField, textKeyField] {
             field.delegate = self
+        }
+        updateStatus()
+    }
+
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        checking?.cancel()
+    }
+
+    /// `addNote` for a note with a link in it.
+    private func addLinkNote(_ view: NSView) {
+        let row = grid.addRow(with: [NSGridCell.emptyContentView, view])
+        row.topPadding = -4
+        row.bottomPadding = 6
+    }
+
+    private static func milliseconds(_ duration: Duration) -> Int {
+        let (seconds, attoseconds) = duration.components
+        return Int(seconds) * 1000 + Int(attoseconds / 1_000_000_000_000_000)
+    }
+
+    private static func wrapping(_ label: NSTextField, lines: Int) -> NSTextField {
+        label.lineBreakMode = .byWordWrapping
+        label.maximumNumberOfLines = lines
+        label.preferredMaxLayoutWidth = controlWidth
+        return label
+    }
+
+    /// A note with a link after it that opens `url` in the browser.
+    private static func noteWithLink(_ text: String, link: String, url: String, target: JevSettingsPane) -> NSView {
+        let button = NSButton(title: link, target: target, action: #selector(openLink(_:)))
+        button.isBordered = false
+        button.attributedTitle = NSAttributedString(string: link + " \u{2197}", attributes: [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.linkColor,
+        ])
+        button.toolTip = url
+        button.identifier = NSUserInterfaceItemIdentifier(url)
+        let row = NSStackView(views: [note(text), button])
+        row.spacing = 4
+        row.alignment = .firstBaseline
+        return row
+    }
+
+    @objc private func openLink(_ sender: NSButton) {
+        guard let string = sender.identifier?.rawValue, let url = URL(string: string) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Whether agents get run_task, and what is missing.
+    private func updateStatus() {
+        let (title, note, color): (String, String, NSColor) = switch JevKey.status(profile: profile.id) {
+        case .ready: ("Ready", "Agents can hand tasks on a page to Jev, typing included.", .systemGreen)
+        case .clickOnly: ("Clicks only", "Add a text model key so Jev can type into fields.", .systemOrange)
+        case .off: ("Off", "Add a TypeSafe API key to give agents run_task.", .tertiaryLabelColor)
+        }
+        statusLabel.stringValue = title
+        statusNote.stringValue = note
+        statusDot.layer?.backgroundColor = color.layerColor
+        statusDot.setAccessibilityElement(false)
+        checkButton.isEnabled = JevKey.status(profile: profile.id) != .off
+        if !checkButton.isEnabled { Self.show("", in: checkResult) }
+    }
+
+    @objc private func checkKeys(_ sender: Any?) {
+        checking?.cancel()
+        checkButton.isEnabled = false
+        Self.show("Checking\u{2026}", in: checkResult)
+        checking = Task { [weak self, profile] in
+            let (typesafe, text) = await JevControl.check(profile: profile)
+            guard let self, !Task.isCancelled else { return }
+            checkButton.isEnabled = true
+            let parts = [("TypeSafe", typesafe), ("Text model", text)].compactMap { name, result in
+                result.map { (name, $0) }
+            }
+            let failed = parts.filter { if case .failure = $0.1 { true } else { false } }
+            if let (name, result) = failed.first, case .failure(let error) = result {
+                Self.show("\(name): \(error.message)", in: checkResult, warning: true)
+            } else {
+                let times: [String] = parts.map { name, result in
+                    let ms = (try? result.get()).map(Self.milliseconds) ?? 0
+                    return "\(name) \(ms) ms"
+                }
+                Self.show("\u{2713} " + times.joined(separator: " \u{00B7} "), in: checkResult)
+            }
         }
     }
 
@@ -260,6 +438,14 @@ final class JevSettingsPane: SettingsPane, NSTextFieldDelegate {
         case textURLField: settings.jevTextBaseURLSetting = field.stringValue
         case textModelField: settings.jevTextModelSetting = field.stringValue
         default: break
+        }
+        if field === typesafeKeyField || field === textKeyField { updateStatus() }
+        // An earlier check said nothing about the keys as they are now.
+        if !checkResult.stringValue.isEmpty, checking != nil {
+            checking?.cancel()
+            checking = nil
+            Self.show("", in: checkResult)
+            checkButton.isEnabled = JevKey.status(profile: profile.id) != .off
         }
     }
 
