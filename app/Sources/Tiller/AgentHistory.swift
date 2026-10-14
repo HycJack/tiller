@@ -59,6 +59,9 @@ final class AgentHistoryStore {
         /// A conversation id per open tab, or "" for a new, empty chat.
         var tabs: [String] = []
         var selectedTab = 0
+        /// Messages typed and sent in any chat, oldest first. Optional, so
+        /// an index saved before it existed still reads.
+        var prompts: [String]?
     }
 
     private let profileFolder: String
@@ -159,6 +162,26 @@ final class AgentHistoryStore {
         guard tabs != index.tabs || selected != index.selectedTab else { return }
         index.tabs = tabs
         index.selectedTab = selected
+        indexChanged = true
+        scheduleWrite()
+    }
+
+    // MARK: Sent messages
+
+    /// Messages typed and sent in any of the profile's chats, oldest first,
+    /// each once, for Up, Down and Ctrl+R in the message field.
+    var prompts: [String] { index.prompts ?? [] }
+
+    private static let maxPrompts = 500
+
+    /// Adds `text` as the newest message, moving it there if it was sent before.
+    func addPrompt(_ text: String) {
+        var prompts = index.prompts ?? []
+        guard prompts.last != text else { return }
+        prompts.removeAll { $0 == text }
+        prompts.append(text)
+        if prompts.count > Self.maxPrompts { prompts.removeFirst(prompts.count - Self.maxPrompts) }
+        index.prompts = prompts
         indexChanged = true
         scheduleWrite()
     }

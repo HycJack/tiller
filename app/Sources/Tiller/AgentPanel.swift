@@ -768,13 +768,14 @@ private final class SuggestionButton: NSView {
 // MARK: Composer
 
 /// The message field: a rounded box whose text grows with what is typed, up
-/// to a few lines, with the attach button and the send/stop button in its
+/// to a few lines, with the add button and the send/stop button in its
 /// bottom corners. Attached images show above the text. Images pasted or
 /// dropped on it go to `onImages`.
 final class Composer: NSView {
     let textView = PlaceholderTextView()
     let sendButton = NSButton()
-    let attachButton = Theme.iconButton("paperclip", label: "Attach Images")
+    /// Opens a menu of things to add: images, or a message sent before.
+    let addButton = Theme.iconButton("plus", label: "Add")
     var onImages: (([NSImage]) -> Void)?
     var onOpenImage: ((Int) -> Void)?
     private let undo = UndoManager()
@@ -879,7 +880,7 @@ final class Composer: NSView {
         sendButton.imagePosition = .imageOnly
         updateSendButton()
 
-        for view in [thumbnails, scrollView, attachButton, sendButton] {
+        for view in [thumbnails, scrollView, addButton, sendButton] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -892,11 +893,11 @@ final class Composer: NSView {
             thumbnails.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             textBelowTop,
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
-            scrollView.leadingAnchor.constraint(equalTo: attachButton.trailingAnchor, constant: 2),
+            scrollView.leadingAnchor.constraint(equalTo: addButton.trailingAnchor, constant: 2),
             scrollView.trailingAnchor.constraint(equalTo: sendButton.leadingAnchor, constant: -6),
             textHeight,
-            attachButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            attachButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
+            addButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            addButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
             sendButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             sendButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
             sendButton.widthAnchor.constraint(equalToConstant: Theme.ButtonSize.bar),
@@ -907,6 +908,36 @@ final class Composer: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     private static let lineHeight = NSLayoutManager().defaultLineHeight(for: font)
+
+    /// Whether the insertion point is on the text's first line, as laid
+    /// out, where Up goes to an older message.
+    var caretOnFirstLine: Bool {
+        let string = textView.string as NSString
+        let location = textView.selectedRange().location
+        guard location > 0, let layoutManager = textView.layoutManager else { return true }
+        // After a final newline, the caret is on a line of its own.
+        if location == string.length, string.character(at: location - 1) == 0x0A { return false }
+        return lineRange(of: min(location, string.length - 1), in: layoutManager).location == 0
+    }
+
+    /// Whether the end of the selection is on the text's last line, as laid
+    /// out, where Down goes to a newer message.
+    var caretOnLastLine: Bool {
+        let string = textView.string as NSString
+        let location = NSMaxRange(textView.selectedRange())
+        guard location < string.length, let layoutManager = textView.layoutManager else { return true }
+        // A final newline starts a line after the last character's.
+        if string.character(at: string.length - 1) == 0x0A { return false }
+        return NSMaxRange(lineRange(of: location, in: layoutManager)) >= layoutManager.numberOfGlyphs
+    }
+
+    /// The glyphs on the laid-out line that holds `character`.
+    private func lineRange(of character: Int, in layoutManager: NSLayoutManager) -> NSRange {
+        let glyph = layoutManager.glyphIndexForCharacter(at: character)
+        var range = NSRange()
+        layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &range)
+        return range
+    }
 
     func textChanged() {
         guard let layoutManager = textView.layoutManager, let container = textView.textContainer else { return }
@@ -1189,9 +1220,15 @@ final class PlaceholderTextView: NSTextView {
         didSet { needsDisplay = true }
     }
     var onFocusChange: (() -> Void)?
+    /// Sees each key first, and returns true for one it handled.
+    var onKeyDown: ((NSEvent) -> Bool)?
     /// Takes the pasteboard's images, returning false if it has none.
     var onPasteboardImages: ((NSPasteboard) -> Bool)?
     weak var imageDropTarget: NSView?
+
+    override func keyDown(with event: NSEvent) {
+        if onKeyDown?(event) != true { super.keyDown(with: event) }
+    }
 
     override func paste(_ sender: Any?) {
         if onPasteboardImages?(.general) != true { super.paste(sender) }

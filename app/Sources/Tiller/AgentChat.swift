@@ -61,6 +61,13 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     private lazy var skillCompletion = SkillCompletion(textView: composer.textView) { [weak self] in
         self?.availableSkills ?? []
     }
+    private let promptSearch = PromptSearch()
+    /// Up and Down's place among the sent messages, nil while the field
+    /// holds what is being written.
+    private var recalled: (prompts: [String], index: Int)?
+    /// What was in the field when Up first went back, which Down past the
+    /// newest message brings back.
+    private var draft = ""
     /// The skills the running agent said it loaded. Until then, `/` offers
     /// what Tiller finds on disk.
     private var loadedSkills: [AgentSkill]?
@@ -291,8 +298,18 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         composer.textView.delegate = self
         composer.sendButton.target = self
         composer.sendButton.action = #selector(sendOrStop(_:))
-        composer.attachButton.target = self
-        composer.attachButton.action = #selector(chooseImages(_:))
+        composer.addButton.target = self
+        composer.addButton.action = #selector(showAddMenu(_:))
+        composer.textView.onKeyDown = { [weak self] event in
+            guard let self, PromptSearch.isSearchKey(event) else { return false }
+            self.searchPrompts()
+            return true
+        }
+        promptSearch.onPick = { [weak self] text in self?.recall(text, focus: true) }
+        promptSearch.onCancel = { [weak self] in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self.composer.textView)
+        }
         composer.onImages = { [weak self] images in self?.attach(images) }
         composer.onOpenImage = { [weak self] index in
             guard let self else { return }
@@ -309,7 +326,7 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         scrollView.wantsLayer = true
         scrollView.layer?.mask = edgeFade
 
-        for view in [scrollView, separator, emptyState, scrollDownButton, queueView, tabBarHost, composer, skillCompletion.picker] as [NSView] {
+        for view in [scrollView, separator, emptyState, scrollDownButton, queueView, tabBarHost, composer, skillCompletion.picker, promptSearch] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -356,6 +373,10 @@ final class AgentChatView: NSView, NSTextViewDelegate {
             skillCompletion.picker.leadingAnchor.constraint(equalTo: composer.leadingAnchor),
             skillCompletion.picker.trailingAnchor.constraint(equalTo: composer.trailingAnchor),
             skillCompletion.picker.bottomAnchor.constraint(equalTo: composer.topAnchor, constant: -6),
+
+            promptSearch.leadingAnchor.constraint(equalTo: composer.leadingAnchor),
+            promptSearch.trailingAnchor.constraint(equalTo: composer.trailingAnchor),
+            promptSearch.bottomAnchor.constraint(equalTo: composer.topAnchor, constant: -6),
         ])
     }
 
@@ -491,10 +512,15 @@ final class AgentChatView: NSView, NSTextViewDelegate {
 
     /// Enter sends, or queues while a turn runs. Ctrl+Enter stops the turn
     /// and sends right away. Option+Enter or Shift+Enter adds a line. Escape
-    /// stops a running turn.
+    /// stops a running turn. Up on the first line and Down on the last go
+    /// through the messages sent before.
     func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         if skillCompletion.handle(selector) { return true }
         switch selector {
+        case #selector(NSResponder.moveUp(_:)):
+            return stepThroughSent(older: true)
+        case #selector(NSResponder.moveDown(_:)):
+            return stepThroughSent(older: false)
         case #selector(NSResponder.insertNewline(_:)):
             let flags = NSApp.currentEvent?.modifierFlags ?? []
             if flags.contains(.option) || flags.contains(.shift) {
@@ -520,6 +546,8 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     }
 
     func textDidChange(_ notification: Notification) {
+        // An edited message becomes what is being written.
+        recalled = nil
         composer.textChanged()
         skillCompletion.update()
     }
@@ -543,6 +571,8 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         let images = composer.attachments
         let written = !text.isEmpty || !images.isEmpty
         guard written || (!isBusy && !queued.isEmpty) else { return }
+        if !text.isEmpty { profile.agentHistory.addPrompt(text) }
+        recalled = nil
         composer.text = ""
         composer.attachments = []
         skillCompletion.hide()
@@ -560,6 +590,70 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         queuePaused = false
         sendQueued()
     }
+
+    // MARK: Sent messages
+
+    /// Puts the next older or newer sent message in the field, if the caret
+    /// is on the first line for older or the last for newer. Returns whether
+    /// it took the key.
+    private func stepThroughSent(older: Bool) -> Bool {
+        guard older ? composer.caretOnFirstLine : composer.caretOnLastLine else { return false }
+        if recalled == nil {
+            let prompts = profile.agentHistory.prompts
+            guard older, !prompts.isEmpty else { return false }
+            draft = composer.text
+            recalled = (prompts, prompts.count)
+        }
+        guard let (prompts, index) = recalled else { return false }
+        let next = index + (older ? -1 : 1)
+        if next < 0 {
+            NSSound.beep()
+        } else if next >= prompts.count {
+            recall(draft, focus: false)
+        } else {
+            recall(prompts[next], focus: false)
+            recalled = (prompts, next)
+        }
+        return true
+    }
+
+    /// Replaces the field's text with `text`, caret at the end. Images
+    /// attached stay.
+    private func recall(_ text: String, focus: Bool) {
+        recalled = nil
+        skillCompletion.hide()
+        composer.text = text
+        if focus { window?.makeFirstResponder(composer.textView) }
+        composer.textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+        composer.textView.scrollRangeToVisible(composer.textView.selectedRange())
+    }
+
+    /// Opens the search of sent messages above the field.
+    private func searchPrompts() {
+        let prompts = profile.agentHistory.prompts
+        guard !prompts.isEmpty else { return NSSound.beep() }
+        skillCompletion.hide()
+        promptSearch.show(prompts.reversed())
+    }
+
+    @objc private func showAddMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let images = menu.addItem(withTitle: "Add Images…", action: #selector(chooseImages(_:)), keyEquivalent: "")
+        images.target = self
+        images.image = NSImage(systemSymbolName: "photo", accessibilityDescription: nil)
+        let search = menu.addItem(withTitle: "Search Sent Messages…", action: #selector(searchSent(_:)), keyEquivalent: "r")
+        search.keyEquivalentModifierMask = .control
+        search.target = self
+        search.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)
+        search.isEnabled = !profile.agentHistory.prompts.isEmpty
+        // Just below the button, as the tools menu opens. It moves up when
+        // the screen runs out, as it does for a field at the window's bottom.
+        let below = sender.isFlipped ? sender.bounds.maxY + 4 : sender.bounds.minY - 4
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: below), in: sender)
+    }
+
+    @objc private func searchSent(_ sender: Any?) { searchPrompts() }
 
     // MARK: Queue
 

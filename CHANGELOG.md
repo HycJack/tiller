@@ -7,6 +7,10 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+- The agent's message field remembers what you sent: Up on its first
+  line brings back earlier messages from any chat, Down goes forward
+  again, and Ctrl+R searches them. The paperclip is now a plus button
+  whose menu adds images or opens the search.
 - When Tiller quits unexpectedly right after opening, the next launch
   starts without extensions and says so, with a link to Extensions
   settings. An extension that opens a tab as Tiller starts could
