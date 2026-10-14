@@ -639,7 +639,7 @@ final class ToolRowView: NSView, TranscriptRow {
 
     /// The mark for how a run_task ended, from its result's first line:
     /// tiller_mcp's summary, such as "Done in 2.4 s, 5 steps".
-    private static func taskEnding(_ summary: String) -> (symbol: String, description: String, color: NSColor)? {
+    static func taskEnding(_ summary: String) -> (symbol: String, description: String, color: NSColor)? {
         if summary.hasPrefix("Done") { return ("checkmark.circle.fill", "Done", .tertiaryLabelColor) }
         if summary.hasPrefix("Blocked") || summary.hasPrefix("Out of steps") {
             return ("exclamationmark.triangle.fill", "Didn't get there", .systemOrange)

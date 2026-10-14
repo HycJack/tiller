@@ -262,9 +262,9 @@ final class JevSettingsPane: SettingsPane, NSTextFieldDelegate {
 
     override func buildRows() {
         let intro = Self.wrapping(Self.note(
-            "Agents call run_task to hand a short task on one page, such as filling a search form, to TypeSafe's Jev, "
-                + "which picks each click and field in a few hundred milliseconds. A small text model writes what goes in the fields."
-        ), lines: 3)
+            "Agents call run_task to hand a task on one page, such as filling a search form, to TypeSafe's Jev, "
+                + "which picks each click in a few hundred milliseconds. A small text model writes the fields' values."
+        ), lines: 4)
         grid.addRow(with: [NSGridCell.emptyContentView, intro]).bottomPadding = 8
 
         statusDot.wantsLayer = true

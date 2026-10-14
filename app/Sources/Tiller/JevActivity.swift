@@ -18,7 +18,7 @@ struct JevRun {
     var heard = Date()
     var steps = 0
     /// What it is doing, in a few words: "Click button "Search"".
-    var activity = "Reading the page"
+    var activity = JevRun.reading
     /// "click", "type", "select", "scroll", "wait"; nil while deciding.
     var kind: String?
     /// Set once it ends: done, blocked, out_of_steps, stopped or error.
@@ -29,6 +29,8 @@ struct JevRun {
     var stopRequested = false
 
     var isRunning: Bool { status == nil }
+
+    static let reading = "Reading the page"
 
     /// `click [12] button "Search"` as `Click button "Search"`: refs mean
     /// nothing to a person.
@@ -213,7 +215,8 @@ final class JevOverlay {
         }
     }
 
-    private func stopShownRun() {
+    /// The capsule's Stop: the run's next report is told to stop.
+    func stopShownRun() {
         guard let id = shown, runs[id]?.isRunning == true else { return }
         runs[id]?.stopRequested = true
         runs[id]?.activity = "Stopping after this step"
@@ -306,7 +309,7 @@ final class JevActivityView: NSView {
     private let title = NSTextField(labelWithString: "Jev")
     private let activity = NSTextField(labelWithString: "")
     private let clock = NSTextField(labelWithString: "")
-    private let stopButton = HoverButton()
+    private let stopButton = FirstClickButton()
     private var running = false
     /// What it shows, to draw again in another appearance.
     private var run: JevRun?
@@ -425,7 +428,8 @@ final class JevActivityView: NSView {
         guard run.isRunning else { clock.stringValue = ""; clock.isHidden = true; return }
         clock.isHidden = false
         let seconds = Date().timeIntervalSince(run.started)
-        let step = run.steps + (run.kind == nil ? 0 : 1)
+        // The step under way, once the first decision is asked for.
+        let step = run.activity == JevRun.reading ? 0 : run.steps + 1
         clock.stringValue = (step > 0 ? "Step \(step) · " : "") + String(format: "%.1f s", seconds)
     }
 
@@ -459,4 +463,10 @@ final class JevActivityView: NSView {
         // Layer colors don't follow the appearance on their own.
         if let run { update(run) }
     }
+}
+
+/// Stop takes the click that brings the window forward, so a run can be
+/// stopped from another app in one click.
+private final class FirstClickButton: HoverButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
