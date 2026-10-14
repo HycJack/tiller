@@ -1,4 +1,5 @@
 import AppKit
+import os
 import Security
 
 /// An endpoint the user added for an agent CLI, such as DeepSeek's
@@ -231,24 +232,70 @@ final class AgentProviderStore {
 
 /// Providers' keys, one generic password each, by provider id. Other keys,
 /// such as run_task's, are kept the same way under a service of their own.
+///
+/// Reading a key's value can make macOS ask for the login password when the
+/// item was saved by a differently signed build, so `exists` checks without
+/// reading it, and a value read once is remembered until the app quits.
 enum AgentProviderKeychain {
     static let service = "Tiller Agent Provider"
+
+    /// Builds other than Tiller's own (the dev build, say) keep their keys
+    /// apart, under the service with their bundle id after it, so they never
+    /// touch the everyday app's keys.
+    private static let serviceSuffix: String = {
+        guard let id = Bundle.main.bundleIdentifier, id != "dev.sorrycc.tiller" else { return "" }
+        return " (\(id))"
+    }()
+
+    /// Values read or written this run, by service and id; nil for no key.
+    private static let cache = OSAllocatedUnfairLock(initialState: [String: String?]())
 
     private static func query(_ id: String, service: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
+            kSecAttrService as String: service + serviceSuffix,
             kSecAttrAccount as String: id,
         ]
     }
 
+    private static func cacheKey(_ id: String, service: String) -> String { service + "\u{0}" + id }
+
+    private static func cached(_ id: String, service: String) -> String?? {
+        cache.withLock { $0[cacheKey(id, service: service)] }
+    }
+
+    private static func remember(_ key: String?, for id: String, service: String) {
+        cache.withLock { $0[cacheKey(id, service: service)] = .some(key) }
+    }
+
     static func read(_ id: String, service: String = service) -> String? {
+        if let known = cached(id, service: service) { return known }
         var query = query(id, service: service)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        switch SecItemCopyMatching(query as CFDictionary, &result) {
+        case errSecSuccess:
+            guard let data = result as? Data else { return nil }
+            let key = String(data: data, encoding: .utf8)
+            remember(key, for: id, service: service)
+            return key
+        case errSecItemNotFound:
+            remember(nil, for: id, service: service)
+            return nil
+        default:
+            // Denied or cancelled: not remembered, so a later read asks again.
+            return nil
+        }
+    }
+
+    /// Whether a non-empty key is saved, without reading it, so macOS never asks.
+    static func exists(_ id: String, service: String = service) -> Bool {
+        if let known = cached(id, service: service) { return known?.isEmpty == false }
+        var query = query(id, service: service)
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 
     /// An empty key removes it.
@@ -257,12 +304,17 @@ enum AgentProviderKeychain {
         guard !key.isEmpty else { return }
         var add = query(id, service: service)
         add[kSecValueData as String] = Data(key.utf8)
-        add[kSecAttrLabel as String] = service
-        SecItemAdd(add as CFDictionary, nil)
+        add[kSecAttrLabel as String] = service + serviceSuffix
+        if SecItemAdd(add as CFDictionary, nil) == errSecSuccess {
+            remember(key, for: id, service: service)
+        } else {
+            cache.withLock { _ = $0.removeValue(forKey: cacheKey(id, service: service)) }
+        }
     }
 
     static func delete(_ id: String, service: String = service) {
         SecItemDelete(query(id, service: service) as CFDictionary)
+        remember(nil, for: id, service: service)
     }
 }
 

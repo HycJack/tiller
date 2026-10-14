@@ -13,6 +13,10 @@ beta shows what `## Unreleased` holds at the time.
   a stop button while a turn runs. The model and tools menus open from
   the field, above it, and while the agent works the hint says what you
   write is queued. The new tab button sits right after the tab numbers.
+- Sending a message to the agent no longer asks for the login keychain
+  password to check whether run_task's keys are set; Tiller reads a key
+  only when it uses one, once per launch. Development builds keep their
+  provider and Jev keys apart from the installed Tiller's.
 - Agents hand getting somewhere or setting something up on a page, such
   as opening a story's comments, filling a search form or setting
   filters, to TypeSafe's Jev with the new `run_task` tool, or

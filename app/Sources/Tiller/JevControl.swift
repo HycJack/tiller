@@ -56,9 +56,15 @@ enum JevKey: String {
         case ready
     }
 
+    /// Only checks which keys are saved, so it never makes macOS ask for
+    /// the login password; the keys are read when run_task uses them.
     static func status(profile: String) -> Status {
-        guard typesafe.read(profile: profile) != nil else { return .off }
-        return text.read(profile: profile) == nil ? .clickOnly : .ready
+        guard typesafe.exists(profile: profile) else { return .off }
+        return text.exists(profile: profile) ? .ready : .clickOnly
+    }
+
+    func exists(profile: String) -> Bool {
+        AgentProviderKeychain.exists("\(profile).\(rawValue)", service: Self.service)
     }
 
     /// An empty key removes it.
