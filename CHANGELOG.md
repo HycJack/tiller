@@ -7,6 +7,8 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+## 0.3.0
+
 - The agent's message field is redesigned: the text spans the field's
   full width above a row of controls, with the add button, the chat's
   model by name, the tools and a new round send button that turns into
