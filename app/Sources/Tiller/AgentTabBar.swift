@@ -1,8 +1,8 @@
 import AppKit
 
 /// The row above the message field: a numbered button per open chat on the
-/// left, and model, tools, new tab, new chat and history buttons on the
-/// right.
+/// left, followed by the new tab button, and new chat and history buttons on
+/// the right. The chat's model and tools are in the field itself.
 final class AgentTabBar: NSView {
     static let height: CGFloat = 26
 
@@ -12,15 +12,10 @@ final class AgentTabBar: NSView {
     var onNewChat: (() -> Void)?
     /// Gets the history button, to show the list from.
     var onHistory: ((NSView) -> Void)?
-    /// Gets the tools button, to show the menu from.
-    var onTools: ((NSView) -> Void)?
-    /// Gets the model button, to show the menu from.
-    var onModel: ((NSView) -> Void)?
 
     private let tabStack = NSStackView()
-    private let modelButton = Theme.iconButton("cpu", label: "Model")
-    private let toolsButton = Theme.iconButton("wrench.and.screwdriver", label: "Tools")
-    private let newTabButton = Theme.iconButton("plus", label: "New Tab")
+    /// Smaller than the bar's other buttons, since it sits with the tabs.
+    private let newTabButton = Theme.iconButton("plus", label: "New Tab", size: Theme.Symbol.row)
     private let newChatButton = Theme.iconButton("square.and.pencil", label: "New Chat")
     private let historyButton = Theme.iconButton("clock.arrow.circlepath", label: "Chat History")
 
@@ -33,21 +28,12 @@ final class AgentTabBar: NSView {
         newChatButton.action = #selector(newChat(_:))
         historyButton.target = self
         historyButton.action = #selector(history(_:))
-        toolsButton.target = self
-        toolsButton.action = #selector(tools(_:))
-        modelButton.target = self
-        modelButton.action = #selector(model(_:))
-        let buttons = NSStackView(views: [modelButton, toolsButton, newTabButton, newChatButton, historyButton])
+        let buttons = NSStackView(views: [newChatButton, historyButton])
         buttons.spacing = 4
-        // When the tabs and buttons don't fit the panel's width, the bar gives
-        // way rather than holding the panel wider: model, then tools, drop
-        // out first.
-        buttons.setVisibilityPriority(.init(350), for: modelButton)
-        buttons.setVisibilityPriority(.init(400), for: toolsButton)
         // Only the buttons give way. The tabs hold the panel as wide as they
         // need, so none ends up under the buttons.
         buttons.setClippingResistancePriority(.defaultLow, for: .horizontal)
-        for view in [tabStack, buttons] {
+        for view in [tabStack, newTabButton, buttons] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -56,20 +42,17 @@ final class AgentTabBar: NSView {
             tabStack.centerYAnchor.constraint(equalTo: centerYAnchor),
             buttons.trailingAnchor.constraint(equalTo: trailingAnchor),
             buttons.centerYAnchor.constraint(equalTo: centerYAnchor),
-            buttons.leadingAnchor.constraint(greaterThanOrEqualTo: tabStack.trailingAnchor, constant: 8),
+            // Right after the last tab, where the next one will go.
+            newTabButton.leadingAnchor.constraint(equalTo: tabStack.trailingAnchor, constant: 4),
+            newTabButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            buttons.leadingAnchor.constraint(greaterThanOrEqualTo: newTabButton.trailingAnchor, constant: 8),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     /// The new tab button shows only while there is room for another tab.
-    /// `tools` are the selected chat's, which tint the tools button when any
-    /// is on. `model` describes its model options, which tint the model
-    /// button when any differs from the CLI's own.
-    func update(
-        tabs: [(title: String, busy: Bool)], selected: Int, canAddTab: Bool, tools: [AgentTool],
-        model: (summary: String, isDefault: Bool)
-    ) {
+    func update(tabs: [(title: String, busy: Bool)], selected: Int, canAddTab: Bool) {
         while tabStack.arrangedSubviews.count > tabs.count { tabStack.arrangedSubviews.last?.removeFromSuperview() }
         while tabStack.arrangedSubviews.count < tabs.count {
             let index = tabStack.arrangedSubviews.count
@@ -87,26 +70,16 @@ final class AgentTabBar: NSView {
             button.isSelected = index == selected
         }
         newTabButton.isHidden = !canAddTab
-        toolsButton.contentTintColor = tools.isEmpty ? .secondaryLabelColor : Theme.accentColor
-        toolsButton.toolTip = tools.isEmpty
-            ? "Tools: browser only"
-            : "Tools: browser, " + tools.map { $0.displayName.lowercased() }.joined(separator: ", ")
-        modelButton.contentTintColor = model.isDefault ? .secondaryLabelColor : Theme.accentColor
-        modelButton.toolTip = "Model: " + model.summary
     }
 
     @objc private func newTab(_ sender: Any?) { onNewTab?() }
     @objc private func newChat(_ sender: Any?) { onNewChat?() }
     @objc private func history(_ sender: Any?) { onHistory?(historyButton) }
-    @objc private func tools(_ sender: Any?) { onTools?(toolsButton) }
-    @objc private func model(_ sender: Any?) { onModel?(modelButton) }
 
     #if DEBUG
-    /// Clicks the history or tools button for `ui.agentAction`, so what opens
-    /// hangs off that button, as it does for a real click.
+    /// Clicks the history button for `ui.agentAction`, so what opens hangs
+    /// off that button, as it does for a real click.
     func historyForTesting() { history(nil) }
-    func toolsForTesting() { tools(nil) }
-    func modelForTesting() { model(nil) }
     #endif
 }
 

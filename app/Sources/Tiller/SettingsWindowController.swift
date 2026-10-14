@@ -1461,7 +1461,7 @@ final class AgentSettingsPane: SettingsPane, NSTextFieldDelegate, NSTextViewDele
     @objc private func chooseModel(_ sender: NSButton) {
         let kind = modelKind
         AgentModelMenu.popUp(
-            below: sender, kind: kind, profile: profile, options: settings.agentModelOptions(for: kind)
+            from: sender, kind: kind, profile: profile, options: settings.agentModelOptions(for: kind)
         ) { [weak self] options in
             self?.settings.setAgentModelOptions(options, for: kind)
             self?.showModelOptions()

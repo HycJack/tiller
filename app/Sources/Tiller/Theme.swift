@@ -79,6 +79,8 @@ enum Theme {
         static let card: CGFloat = 10
         /// Floating plates, bubbles and chips.
         static let plate: CGFloat = 14
+        /// The agent panel's message field, taller than a plate.
+        static let composer: CGFloat = 16
         /// The start page's site tiles.
         static let tile: CGFloat = 18
     }
@@ -265,6 +267,18 @@ func fadeOut(_ view: NSView, _ duration: TimeInterval = Theme.Duration.standard,
         view.animator().alphaValue = 0
     } completionHandler: {
         MainActor.assumeIsolated { done() }
+    }
+}
+
+extension NSMenu {
+    /// Pops the menu up with its bottom edge just above `view`, as for a
+    /// control along the window's bottom, where a menu below it would be
+    /// pushed up to cover it.
+    @MainActor
+    func popUp(above view: NSView) {
+        let height = size.height
+        let y = view.isFlipped ? view.bounds.minY - 4 - height : view.bounds.maxY + 4 + height
+        popUp(positioning: nil, at: NSPoint(x: 0, y: y), in: view)
     }
 }
 
