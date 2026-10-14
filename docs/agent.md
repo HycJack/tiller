@@ -84,6 +84,10 @@ By default the agent gets Tiller's [browser and skill tools](tools.md) and, apar
 
 The MCP config is written to `mcp.json` in the chat's folder and points at the `tiller_mcp` inside the running app, with the chat's id in `TILLER_CHAT`. Claude Code and Qoder CLI also get `--add-dir` with the [skill library](#tillers-skill-library). The agent runs in the empty `agent` directory in the profile's folder, or in the folder set in Settings > Agent > Working folder. A real project folder loads that project's instructions and settings too.
 
+### Handing tasks to Jev
+
+Agents are told to hand getting somewhere or setting something up on a page, such as opening a result or a story's comments, filling and submitting a form or setting filters, to [`run_task`](tools.md#run_task), which TypeSafe's Jev does in seconds instead of a turn per step. They read pages with `read_page` when they need the content, check the result with it, and click and type themselves when `run_task` ends blocked or with an error. Agents get it only once a TypeSafe API key is in Settings > Jev, and can type with it only once a text model key is there too; a chat sees a change from its agent's next start. The transcript shows it as a Run task row with the goal.
+
 ### Optional built-in tools
 
 Settings > Agent > Allowed tools turns on built-in tools, all off by default. They run without asking, and pages the agent reads can try to steer it, so turn on only what you need. Settings sets the tools a new chat starts with.

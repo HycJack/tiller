@@ -25,6 +25,8 @@ Commands:
   read                      Page text and numbered links, buttons and fields
   click <ref>               Click an element from the latest read
   type [ref] <text>         Type into an element, or into whatever has focus
+  choose <ref> <option>     Pick an option of a dropdown by its value or label
+  run <goal>                Hand a task on the page to Jev and print its steps
   screenshot                Save a JPEG of the visible part of the tab
   eval <expression>         Run JavaScript in the page and print the value
 
@@ -36,6 +38,9 @@ Options:
   --append                  type: keep the field's current text
   --submit                  type: press Enter afterwards
   --max-chars <n>           read: longest text to return (default 20000)
+  --viewport                read: only what is visible without scrolling
+  --read                    click, type, choose: print the page afterwards
+  --max-steps <n>           run: most actions to take (default 30, at most 60)
   -o, --output <file>       screenshot: where to save (default: a temp file)
   --json                    Print the raw result as JSON
   -h, --help                Show this help
@@ -80,7 +85,10 @@ struct Options {
     append: bool,
     submit: bool,
     background: bool,
+    viewport: bool,
+    read: bool,
     max_chars: Option<u64>,
+    max_steps: Option<u64>,
     output: Option<PathBuf>,
     json: bool,
 }
@@ -95,10 +103,13 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, Error> {
             "--tab" => options.tab = Some(number(&value("--tab")?, "--tab")?),
             "--selector" => options.selector = Some(value("--selector")?),
             "--max-chars" => options.max_chars = Some(number(&value("--max-chars")?, "--max-chars")?),
+            "--max-steps" => options.max_steps = Some(number(&value("--max-steps")?, "--max-steps")?),
             "-o" | "--output" => options.output = Some(value("--output")?.into()),
             "--append" => options.append = true,
             "--submit" => options.submit = true,
             "--background" => options.background = true,
+            "--viewport" => options.viewport = true,
+            "--read" => options.read = true,
             "--json" => options.json = true,
             // Everything after -- is positional, for text that starts with a dash.
             "--" => options.positional.extend(args.by_ref()),
@@ -161,12 +172,28 @@ fn run(args: Vec<String>) -> Result<(), Error> {
             call.insert("text".into(), json!(text));
             "type"
         }
+        ("choose", [reference, option]) if options.selector.is_none() => {
+            call.insert("ref".into(), json!(reference));
+            call.insert("option".into(), json!(option));
+            "select"
+        }
+        ("choose", [option]) if options.selector.is_some() => {
+            call.insert("option".into(), json!(option));
+            "select"
+        }
+        ("run", [_, ..]) => {
+            call.insert("goal".into(), json!(positional.join(" ")));
+            if let Some(max) = options.max_steps {
+                call.insert("max_steps".into(), json!(max));
+            }
+            "run_task"
+        }
         ("screenshot", []) => "screenshot",
         ("eval", [_, ..]) => {
             call.insert("expression".into(), json!(positional.join(" ")));
             "eval_js"
         }
-        ("tabs" | "new" | "select" | "close" | "go" | "read" | "click" | "type" | "screenshot" | "eval", _) => {
+        ("tabs" | "new" | "select" | "close" | "go" | "read" | "click" | "type" | "choose" | "run" | "screenshot" | "eval", _) => {
             return Err(usage(format!("wrong arguments for {command}")));
         }
         _ => return Err(usage(format!("unknown command {command:?}"))),
@@ -182,6 +209,15 @@ fn run(args: Vec<String>) -> Result<(), Error> {
     }
     if options.background {
         call.insert("background".into(), json!(true));
+    }
+    if options.viewport {
+        call.insert("viewport".into(), json!(true));
+    }
+    if options.read {
+        call.insert("read".into(), json!(true));
+        if let Some(max) = options.max_chars {
+            call.insert("max_chars".into(), json!(max));
+        }
     }
 
     let mut browser = Browser::default();
@@ -212,21 +248,48 @@ fn run(args: Vec<String>) -> Result<(), Error> {
         }
         "close_tab" => println!("closed {}", value["closing"]),
         "read_page" => print_page(&value),
-        "type" if value.get("typed").is_some() => println!("typed {} chars", value["typed"]),
+        "type" if value.get("typed").is_some() => {
+            println!("typed {} chars", value["typed"]);
+            if let Some(note) = value["note"].as_str() {
+                println!("note: {note}");
+            }
+        }
         "screenshot" => println!("{}", value["path"].as_str().unwrap_or_default()),
-        "eval_js" => match value {
+        "run_task" => {
+            for step in value["steps"].as_array().into_iter().flatten() {
+                let changed = if step["page_changed"] == false { "  (page unchanged)" } else { "" };
+                println!("{:>6} ms  {}{changed}", step["at_ms"], step["action"].as_str().unwrap_or_default());
+            }
+            let status = value["status"].as_str().unwrap_or_default();
+            println!("{status} after {} ms, {} decisions", value["elapsed_ms"], value["decisions"]);
+            if let Some(reason) = value["reason"].as_str() {
+                println!("reason: {reason}");
+            }
+            println!("{}  {}", value["title"].as_str().unwrap_or_default(), value["url"].as_str().unwrap_or_default());
+            if status != "done" {
+                return Err(Error::Failed(format!("the task ended {status}")));
+            }
+        }
+        "eval_js" => match &value {
             Value::String(s) => println!("{s}"),
             Value::Null => println!("undefined"),
-            other => println!("{}", serde_json::to_string_pretty(&other).unwrap_or_default()),
+            other => println!("{}", serde_json::to_string_pretty(other).unwrap_or_default()),
         },
         // new_tab, select_tab, navigate, click, and type with --submit return
         // the tab's info.
         _ => {
             println!("{}", tab_line(&value));
+            if let Some(selected) = value["selected"].as_str() {
+                println!("selected {}", json!(selected));
+            }
             if let Some(note) = value["note"].as_str() {
                 println!("note: {note}");
             }
         }
+    }
+    if tool != "read_page" && value["page"].is_object() {
+        println!();
+        print_page(&value["page"]);
     }
     Ok(())
 }
@@ -273,10 +336,40 @@ fn print_page(page: &Value) {
         if let Some(href) = element["href"].as_str() {
             line += &format!(" → {href}");
         }
+        if let Some(value) = element.get("value") {
+            line += &format!(" value={value}");
+        }
+        if element["filled"] == true {
+            line += " (filled)";
+        }
+        for key in ["checked", "selected", "expanded", "pressed"] {
+            match &element[key] {
+                Value::Bool(true) => line += &format!(" ({key})"),
+                Value::Bool(false) => line += &format!(" (not {key})"),
+                Value::String(s) => line += &format!(" ({key}={s})"),
+                _ => {}
+            }
+        }
         if element["offscreen"] == true {
             line += " (offscreen)";
         }
         println!("{line}");
+        let options = element["options"].as_array().map(Vec::as_slice).unwrap_or_default();
+        if !options.is_empty() {
+            let labels: Vec<String> = options
+                .iter()
+                .filter(|o| o["disabled"] != true)
+                .map(|o| format!("{}{}", json!(o["label"].as_str().unwrap_or_default()), if o["selected"] == true { "*" } else { "" }))
+                .collect();
+            let more = element["more_options"].as_u64().map(|n| format!(" and {n} more")).unwrap_or_default();
+            println!("    options: {}{more}", labels.join(", "));
+        }
+    }
+    if let Some(more) = page["more_elements"].as_u64() {
+        println!("[{more} more elements not listed]");
+    }
+    if let Some(scroll) = page["scroll"].as_object() {
+        println!("[scrolled to {} of {}, {} tall]", scroll["y"], scroll["height"], scroll["viewport"]);
     }
 }
 

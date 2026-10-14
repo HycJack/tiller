@@ -1053,10 +1053,11 @@ enum AgentEnvironment {
     private static let basePrompt = """
         You are running inside Tiller, a web browser for macOS. The user talks to you in a narrow \
         side panel next to the page. You act on the browser only through the tiller tools \
-        (list_tabs, new_tab, select_tab, close_tab, navigate, read_page, click, type, screenshot, \
-        eval_js). Each user message starts with the selected tab's id, title and URL, which is \
-        usually the page the user means. Call read_page before clicking or typing and use the \
-        refs it returns. Every tool works in background tabs, so pass tab_id rather than \
+        (list_tabs, new_tab, select_tab, close_tab, navigate, read_page, click, type, select, \
+        screenshot, eval_js). Each user message starts with the selected tab's id, title \
+        and URL, which is usually the page the user means. Call read_page before clicking or \
+        typing and use the refs it returns; pass read true to click, type or select to get the \
+        page back with the action instead of calling read_page again. Every tool works in background tabs, so pass tab_id rather than \
         selecting a tab, and open tabs of your own with new_tab background so the user's \
         tab stays in front. Keep replies short.
 
@@ -1072,11 +1073,28 @@ enum AgentEnvironment {
         its own, and it may start with /name to call a skill.
         """
 
+    private static let runTaskPrompt = """
+        To get somewhere or set something up on a page, call run_task with the whole goal and \
+        every value it needs instead of clicking and typing yourself: opening a result, a \
+        story's comments or a page behind a menu, filling and submitting a form, setting \
+        filters. A fast model does the clicks and typing in one call. Use read_page when you \
+        need the page's content, and click and type when run_task ends blocked or with an \
+        error, or for a page it can't handle (frames, uploads, canvas). Check its result with \
+        read_page.
+        """
+
     /// Tiller's prompt, a line on the file and shell tools if any are on, then
     /// the extra instructions from Settings. Antigravity CLI has every tool,
     /// its own browser included, so it is told to leave that alone.
     static func systemPrompt(tools: [AgentTool], kind: AgentKind? = nil, settings: ProfileSettings) -> String {
         var parts = [basePrompt]
+        // Only with Jev set up: tiller_mcp leaves the tool out without a key.
+        switch JevKey.status(profile: settings.profileID) {
+        case .off: break
+        case .ready: parts.append(runTaskPrompt)
+        case .clickOnly:
+            parts.append(runTaskPrompt + " It can't type into fields here, since no text model is set up in Settings > Jev: give it only goals that need no typing.")
+        }
         var tools = tools
         if kind == .agy {
             tools = AgentTool.allCases

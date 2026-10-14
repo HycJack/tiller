@@ -1618,6 +1618,9 @@ extension BrowserWindowController {
         case "tabs.list":
             // Tabs that aren't loaded stay that way until a tool acts on them.
             return ["tabs": tabs.map(info)]
+        case "tabs.info":
+            // One tab's info, such as whether it is loading, without loading it.
+            return info(try tab(for: params))
         case "tabs.resolve":
             // Before a tool reads or drives a tab: loads it if it isn't, and
             // says so, so the caller can wait for the page.

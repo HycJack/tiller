@@ -229,11 +229,12 @@ final class AgentProviderStore {
     }
 }
 
-/// Providers' keys, one generic password each, by provider id.
+/// Providers' keys, one generic password each, by provider id. Other keys,
+/// such as run_task's, are kept the same way under a service of their own.
 enum AgentProviderKeychain {
-    private static let service = "Tiller Agent Provider"
+    static let service = "Tiller Agent Provider"
 
-    private static func query(_ id: String) -> [String: Any] {
+    private static func query(_ id: String, service: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -241,8 +242,8 @@ enum AgentProviderKeychain {
         ]
     }
 
-    static func read(_ id: String) -> String? {
-        var query = query(id)
+    static func read(_ id: String, service: String = service) -> String? {
+        var query = query(id, service: service)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -251,17 +252,17 @@ enum AgentProviderKeychain {
     }
 
     /// An empty key removes it.
-    static func write(_ key: String, for id: String) {
-        delete(id)
+    static func write(_ key: String, for id: String, service: String = service) {
+        delete(id, service: service)
         guard !key.isEmpty else { return }
-        var add = query(id)
+        var add = query(id, service: service)
         add[kSecValueData as String] = Data(key.utf8)
         add[kSecAttrLabel as String] = service
         SecItemAdd(add as CFDictionary, nil)
     }
 
-    static func delete(_ id: String) {
-        SecItemDelete(query(id) as CFDictionary)
+    static func delete(_ id: String, service: String = service) {
+        SecItemDelete(query(id, service: service) as CFDictionary)
     }
 }
 

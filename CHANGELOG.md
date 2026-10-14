@@ -7,6 +7,26 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+- Agents hand getting somewhere or setting something up on a page, such
+  as opening a story's comments, filling a search form or setting
+  filters, to TypeSafe's Jev with the new `run_task` tool, or
+  `tiller run "<goal>"`: Jev picks each click, field and option in a few
+  hundred milliseconds instead of a turn per step, and a small text model
+  writes what goes in the fields. Agents get the tool once a TypeSafe
+  key is added in Settings > Jev.
+- Clicks that don't load a page return in about a quarter of a second
+  instead of a second, and `click`, `type` and the new `select` take
+  `read: true` to return the page after acting, saving the agent a step.
+- `read_page` refs stay the same while an element stays on the page and
+  are no longer written into the page, and acting on one whose element
+  has changed fails instead of clicking the wrong thing. It also lists
+  fields by their labels, with their values, checked and expanded state
+  and a dropdown's options, leaves out hidden controls, and takes
+  `viewport` to list only what is on screen.
+- The new `select` tool, and `tiller choose`, pick a dropdown's option.
+  `type` clicks the field before typing, so fields that open suggestions
+  or a search box of their own on a click get the text.
+
 - When Tiller quits unexpectedly right after opening, the next launch
   starts without extensions and says so, with a link to Extensions
   settings. An extension that opens a tab as Tiller starts could

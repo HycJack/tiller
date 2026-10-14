@@ -697,6 +697,8 @@ final class ToolRowView: NSView, TranscriptRow {
         case "read_page": "Read page"
         case "click": "Click"
         case "type": "Type"
+        case "select": "Choose option"
+        case "run_task": "Run task"
         case "navigate": "Open page"
         case "new_tab": "New tab"
         case "select_tab": "Select tab"
@@ -774,6 +776,8 @@ final class ToolRowView: NSView, TranscriptRow {
         }
         if let ref = input["ref"] { parts.append("ref \(ref)") } else if let selector = input["selector"] { parts.append("\(selector)") }
         if let text = input["text"] { parts.append("\"\(text)\"") }
+        if let option = input["option"] { parts.append("\"\(option)\"") }
+        if let goal = input["goal"] { parts.append("\(goal)") }
         if let expression = input["expression"] { parts.append("\(expression)") }
         if let command = input["command"] { parts.append("\(command)") }
         if let pattern = input["pattern"] { parts.append("\(pattern)") }

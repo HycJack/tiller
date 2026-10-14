@@ -13,9 +13,11 @@ Tiller exposes one set of browser tools two ways: as an MCP server for agents an
 | `select_tab` | Brings a tab to the front |
 | `close_tab` | Closes a tab (the page may still ask to confirm) |
 | `navigate` | Loads a URL or search and waits for the load |
-| `read_page` | Page text plus numbered links, buttons and fields |
+| `read_page` | Page text plus numbered links, buttons and fields, with their labels, values, checked, selected or expanded state and a dropdown's options. `viewport` keeps to what is visible without scrolling |
 | `click` | Real mouse click on an element's center by `ref` or CSS `selector` |
-| `type` | Types into a field, replacing its text unless `append` is set, optionally presses Enter |
+| `type` | Clicks a field and types into it, replacing its text unless `append` is set, optionally presses Enter |
+| `select` | Picks a dropdown (`<select>`) option by its value or label |
+| `run_task` | Hands a short task on the page, such as filling a search form, to TypeSafe's Jev (see [run_task](#run_task)) |
 | `screenshot` | JPEG of the visible part of the tab, in CSS pixels, the units `click` uses |
 | `eval_js` | Runs an expression in the page and returns the value as JSON |
 | `list_skills` | Every skill agents can call: the library's, marked editable and on or off, then the CLIs' own |
@@ -28,13 +30,17 @@ Tiller exposes one set of browser tools two ways: as an MCP server for agents an
 
 Tools act on the selected tab unless given `tab_id`, and work in background tabs without bringing them to the front, so agents can each work in a tab of their own while you use another. Only `select_tab` and `new_tab` without `background` change the selected tab.
 
-Background tabs are hidden, and Chromium stops drawing hidden pages and stalls or drops their input. So `click`, `type` and `screenshot` wake their tab first: Tiller unhides it behind the selected tab, where it draws and takes input, and hides it again 30 seconds after the last of these calls. While awake, the page counts as visible, so its animations and videos run as in a front tab. `read_page` and `eval_js` don't need to wake a tab.
+Background tabs are hidden, and Chromium stops drawing hidden pages and stalls or drops their input. So `click`, `type`, `select`, `run_task` and `screenshot` wake their tab first: Tiller unhides it behind the selected tab, where it draws and takes input, and hides it again 30 seconds after the last of these calls. While awake, the page counts as visible, so its animations and videos run as in a front tab. `read_page` and `eval_js` don't need to wake a tab.
 
 A tab's id stays the same for as long as the tab is open. Listing tabs doesn't load them: a tab restored at launch and not yet selected, or one [unloaded to save memory](browser.md#unloading-inactive-tabs), is listed with `loaded` false, and loads its page when a tool acts on it, which then waits for the load. Tabs an agent has used in the last few minutes count as in use, so they don't unload under it.
 
-`read_page` marks each element it lists with a `data-tiller-ref` attribute, which pages can see. Refs are renumbered on every call.
+`read_page` numbers each element it lists with a ref, kept in the page against the element itself rather than written into it. An element keeps its ref while it stays on the page, so a later read gives it the same number, and a new element gets a new one; a new page starts again from 1. Acting on a ref whose element has gone, or has turned into something else (another role or label, as a button re-rendered with other text), fails with an error asking for a new read instead of acting on the wrong thing. Elements that are hidden, transparent, `inert`, under `aria-hidden` or disabled aren't listed, and a password field shows only whether it is `filled`.
 
-How it's wired: tab operations (`tabs.*`, including `tabs.resolve`, which loads the tab a tool is about to act on if it isn't, `tabs.wake` and `tabs.wait_load`, which answers once a tab's load ends or a moment passes with none starting) skill operations (`skills.*`, in `AgentSkills.swift`) and schedule operations (`schedules.*`, in `AgentSchedules.swift`) are answered by the Swift app (`ControlServer.swift`). Everything that touches page content is a DevTools protocol command (`Runtime.evaluate`, `Input.dispatchMouseEvent`, `Input.insertText`, `Page.captureScreenshot`) that the Rust core sends straight to the tab (`core/src/ipc.rs`, `core/src/browser.rs`), found by its tab id; a tab that isn't loaded has no DevTools agent to send to.
+`click`, `type` and `select` take `read: true` to return the page as `read_page` would, under `page`, once it has reacted: two frames, at most 50 ms, or after typing into a combobox, until its suggestions show, at most 200 ms. That saves the agent a call. After a click, a submit or a select, the tool gives a load 250 ms to start and waits for it if one does. Before reading, a tool waits up to 3 seconds for a load in progress, so it doesn't read the page being left.
+
+`type` with a ref or selector clicks the field first, since some fields open their suggestions, or a field of their own, only when clicked. If the click puts the focus in another field, as a search box that opens a dialog with its own input, that field gets the text and the result says so.
+
+How it's wired: tab operations (`tabs.*`, including `tabs.info`, `tabs.resolve`, which loads the tab a tool is about to act on if it isn't, `tabs.wake` and `tabs.wait_load`, which answers once a tab's load ends or a moment passes with none starting) skill operations (`skills.*`, in `AgentSkills.swift`) schedule operations (`schedules.*`, in `AgentSchedules.swift`) and run_task's model requests (`jev.*`, in `JevControl.swift`) are answered by the Swift app (`ControlServer.swift`). Everything that touches page content is a DevTools protocol command (`Runtime.evaluate`, `Input.dispatchMouseEvent`, `Input.insertText`, `Page.captureScreenshot`) that the Rust core sends straight to the tab (`core/src/ipc.rs`, `core/src/browser.rs`), found by its tab id; a tab that isn't loaded has no DevTools agent to send to. What runs in the page, reading it and finding, focusing and choosing elements, is one script, `mcp/src/page.js`.
 
 To try it without an agent:
 
@@ -56,6 +62,10 @@ tiller read                        # text, then [ref] lines for links, buttons a
 tiller click 3
 tiller type 5 "hello" --submit
 tiller type --selector '#q' hi     # CSS selector instead of a ref
+tiller choose 7 "Business"         # a dropdown's option, by label or value
+tiller click 4 --read              # and print the page afterwards
+tiller read --viewport             # only what is on screen
+tiller run "Search flights from Zurich to London on 20 September"
 tiller screenshot -o page.jpg      # prints the path; a temp file without -o
 tiller eval 'document.title'
 tiller close 2
@@ -69,15 +79,27 @@ tiller --profile work tabs         # another open profile's tabs
 | `select <tab>` | `select_tab` |
 | `close <tab>` | `close_tab` |
 | `go <url>` | `navigate` |
-| `read [--max-chars N]` | `read_page` |
+| `read [--max-chars N] [--viewport]` | `read_page` |
 | `click <ref>` | `click` |
 | `type [ref] <text> [--append] [--submit]` | `type`, into the focused element when no ref or selector is given |
+| `choose <ref> <option>` | `select` |
+| `run <goal> [--max-steps N]` | `run_task`; prints each step, and exits 1 unless the task ends done |
 | `screenshot [-o file]` | `screenshot` |
 | `eval <expression>` | `eval_js` |
 
-`--profile <name>` controls that profile instead of the one used last, and takes an id too. The profile has to be open. `--tab <id>` acts on another tab than the selected one, and `--json` prints the raw result instead of text. Options can come before or after the command. Refs are stored in the page, so a `read` in one call and a `click` in the next agree. Errors go to stderr with exit code 1, or 2 for bad arguments. Like `tiller_mcp`, it needs Tiller running, with the profile open, and honors `TILLER_SOCKET` and `TILLER_PROFILE`.
+`--profile <name>` controls that profile instead of the one used last, and takes an id too. The profile has to be open. `--tab <id>` acts on another tab than the selected one, and `--json` prints the raw result instead of text. Options can come before or after the command. `--read` after `click`, `type` or `choose` prints the page afterwards. Refs are stored in the page, so a `read` in one call and a `click` in the next agree. Errors go to stderr with exit code 1, or 2 for bad arguments. Like `tiller_mcp`, it needs Tiller running, with the profile open, and honors `TILLER_SOCKET` and `TILLER_PROFILE`.
 
 The tool code is in `mcp/src/browser.rs`. `mcp/src/main.rs` wraps it as MCP and `mcp/src/bin/tiller.rs` as the CLI.
+
+## run_task
+
+`run_task` hands a goal on the page, such as "search one-way flights from Zurich to London on 20 September for one adult", to [TypeSafe's Jev](https://docs.typesafe.ai/introduction), following [jev-ultrafast](https://github.com/browser-use/jev-ultrafast). Instead of writing each step, Jev chooses it: each turn Tiller reads the visible part of the page, numbers the controls a click can reach, and asks in one request which operation comes next (click, type, select, scroll up or down, wait, done or blocked) and which element each operation would act on, so a step takes a few hundred milliseconds. When Jev picks typing, a small text model writes the field's value from the goal. Settings > Jev holds the TypeSafe key, the text model's OpenAI-compatible URL, model and key (OpenRouter's `inception/mercury-2.5` unless changed), all kept in the profile, the keys in the Keychain. The keys stay in the app: `tiller_mcp` sends the requests to it as `jev.decide` and `jev.text`, and the app adds the key. Without a TypeSafe key, `tiller_mcp` leaves `run_task` out of its tools (it asks the app with `jev.status`), and agents aren't told about it; with one but no text model key, the tool says it can't type, and agents give it only goals that need no typing. Agents see a change from their next start. `tiller run` is always there and says which key is missing.
+
+The model only ever picks among the elements Tiller listed; it never writes selectors, coordinates or script, and the text model's answer has to be a JSON object with only `text`, which is typed and nothing else. Before acting, Tiller checks the decision is still about the page as it is: the element still there, with the same role and label, not covered, and the URL the same, or for typing, scrolling, waiting and done, the whole visible page unchanged. Otherwise it reads the page again and asks again. Nothing that acts on the page is tried twice: when it isn't known whether an action landed, the run stops.
+
+A run ends `done` when Jev says every part of the goal is visibly met, which is its judgement and worth checking with `read_page`; `blocked` when Jev says so, when the text model finds no value for a field in the goal, when three actions in a row leave the page unchanged, or when the same action comes up three times in six steps; `out_of_steps` after `max_steps` actions (30 unless given, at most 60) or twice as many decisions; `stopped` when the call is cancelled or the agent goes away; and `error` when a model can't be reached or a key is missing. It answers with the status, each step (what it did, the text it typed, whether the page changed, and when), the URL and title it ended on and how long it took.
+
+Jev reads only the visible page and the common HTML and ARIA controls: frames, shadow roots, canvas, file uploads, pop-up windows and widgets driven by the keyboard are out of its reach. The goal and the visible text of the page go to TypeSafe, and to the text model when it types.
 
 ## chrome-use and CDP
 

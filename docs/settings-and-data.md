@@ -4,7 +4,7 @@ Tiller's settings, the switches it passes to Chromium, and where it stores data.
 
 ## Settings
 
-Tiller > Settings… (Cmd+,) opens the Settings of the front window's profile. It has seven panes: General, Passwords, Extensions (see [Extensions](browser.md#extensions)), Agent, Skills (see [Skills](agent.md#tillers-skill-library)), Scheduled (see [Scheduled prompts](agent.md#scheduled-prompts)) and Profiles (see [Profiles](browser.md#profiles)). Changes are saved as you make them, and apply to that profile only, except the default browser, which macOS keeps for the app, and the appearance, accent color, agent shortcut, updates, extensions and remote debugging, which every profile shares.
+Tiller > Settings… (Cmd+,) opens the Settings of the front window's profile. It has nine panes: General, Passwords, Extensions (see [Extensions](browser.md#extensions)), Agent, Providers (see [Custom providers](agent.md#custom-providers)), Jev (see [run_task](tools.md#run_task)), Skills (see [Skills](agent.md#tillers-skill-library)), Scheduled (see [Scheduled prompts](agent.md#scheduled-prompts)) and Profiles (see [Profiles](browser.md#profiles)). Changes are saved as you make them, and apply to that profile only, except the default browser, which macOS keeps for the app, and the appearance, accent color, agent shortcut, updates, extensions and remote debugging, which every profile shares.
 
 | Pane | Setting | Default | Takes effect |
 |---|---|---|---|

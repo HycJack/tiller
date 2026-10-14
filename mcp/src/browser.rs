@@ -13,6 +13,19 @@ use std::{
 /// How long navigate, new_tab and click wait for a page to finish loading.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long a load gets to start after a click, a submit or a select before
+/// the tool returns. Links start theirs at once; this catches the script that
+/// navigates a moment later without making every other click wait.
+const ACTION_GRACE_MS: u64 = 250;
+
+/// The longest a read waits for a load in progress before reading the page
+/// as it is. Long enough for the new page to show; a page still fetching
+/// images or ads is worth reading already.
+pub(crate) const READ_LOAD_WAIT: Duration = Duration::from_secs(3);
+
+/// The script that reads and acts on pages, as `(op, arg) => result`.
+pub(crate) const PAGE_JS: &str = include_str!("page.js");
+
 /// What a tool returns.
 pub enum Output {
     Json(Value),
@@ -27,6 +40,8 @@ pub struct Browser {
     /// The profile whose Tiller to talk to, by id or name. None means the
     /// one in TILLER_PROFILE, else the one used last.
     pub profile: Option<String>,
+    /// Tells a long call, such as run_task, that it has been cancelled.
+    pub cancelled: Option<Box<dyn Fn() -> bool>>,
     conn: Option<(UnixStream, BufReader<UnixStream>)>,
     next_id: u64,
 }
@@ -55,38 +70,39 @@ impl Browser {
             }
             "read_page" => {
                 let id = self.resolve(tab)?;
-                let max = args["max_chars"].as_u64().unwrap_or(20_000);
-                json_out(self.evaluate(id, &format!("({READ_PAGE_JS})({max})"))?)
+                json_out(self.read(id, args)?)
             }
             "click" => {
                 let id = self.wake(tab)?;
-                let selector = target_selector(args)?;
-                let point = self.evaluate(id, &format!("({LOCATE_JS})({})", json!(selector)))?;
-                let (Some(x), Some(y)) = (point["x"].as_f64(), point["y"].as_f64()) else {
-                    return Err(format!("no element matches {selector}"));
-                };
-                self.mouse(id, "mouseMoved", x, y)?;
-                self.mouse(id, "mousePressed", x, y)?;
-                self.mouse(id, "mouseReleased", x, y)?;
-                let mut info = self.wait_for_load_within(id, 1000)?;
+                let target = target(args)?;
+                let point = self.page(id, "locate", json!({ "target": target }))?;
+                self.click_at(id, &point)?;
+                let mut info = self.wait_for_load_within(id, ACTION_GRACE_MS)?;
                 if point["covered"] == true {
                     info["note"] = json!("another element was on top of the target at its center and got the click");
                 }
-                json_out(info)
+                json_out(self.read_after(id, Some(&target), false, args, info)?)
             }
             "type" => {
                 let id = self.wake(tab)?;
                 let value = args["text"].as_str().ok_or("text is required")?;
-                if args.get("ref").is_some() || args.get("selector").is_some() {
-                    let selector = target_selector(args)?;
+                let target = if args.get("ref").is_some() || args.get("selector").is_some() { Some(target(args)?) } else { None };
+                let mut note = None;
+                if let Some(target) = &target {
+                    let point = self.page(id, "locate", json!({ "target": target }))?;
+                    // A real click first: some fields open their suggestions,
+                    // or a field of their own, only when clicked.
+                    if point["covered"] != true {
+                        self.click_at(id, &point)?;
+                    }
                     let append = args["append"].as_bool().unwrap_or(false);
-                    let found = self.evaluate(id, &format!("({FOCUS_JS})({}, {append})", json!(selector)))?;
-                    if found != true {
-                        return Err(format!("no element matches {selector}"));
+                    let focus = self.page(id, "focus", json!({ "target": target, "append": append }))?;
+                    if focus["moved"] == true {
+                        note = Some("clicking the field put the focus in another field, which got the text");
                     }
                 }
                 self.cdp(id, "Input.insertText", json!({ "text": value }))?;
-                if args["submit"].as_bool().unwrap_or(false) {
+                let mut info = if args["submit"].as_bool().unwrap_or(false) {
                     for kind in ["keyDown", "keyUp"] {
                         let mut key = json!({ "type": kind, "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13 });
                         if kind == "keyDown" {
@@ -94,9 +110,25 @@ impl Browser {
                         }
                         self.cdp(id, "Input.dispatchKeyEvent", key)?;
                     }
-                    return json_out(self.wait_for_load_within(id, 1000)?);
+                    self.wait_for_load_within(id, ACTION_GRACE_MS)?
+                } else {
+                    json!({ "typed": value.chars().count() })
+                };
+                if let Some(note) = note {
+                    info["note"] = json!(note);
                 }
-                json_out(json!({ "typed": value.chars().count() }))
+                json_out(self.read_after(id, target.as_ref(), true, args, info)?)
+            }
+            "select" => {
+                let id = self.wake(tab)?;
+                let target = target(args)?;
+                let option = args["option"].as_str().ok_or("option is required")?;
+                let chosen = self.page(id, "select", json!({ "target": target, "option": option }))?;
+                // A page may load another on the change, as a language menu does.
+                let mut info = self.wait_for_load_within(id, ACTION_GRACE_MS)?;
+                info["selected"] = chosen["selected"].clone();
+                info["value"] = chosen["value"].clone();
+                json_out(self.read_after(id, Some(&target), false, args, info)?)
             }
             "screenshot" => {
                 let id = self.wake(tab)?;
@@ -133,6 +165,7 @@ impl Browser {
                 let expression = args["expression"].as_str().ok_or("expression is required")?;
                 json_out(self.evaluate(id, expression)?)
             }
+            "run_task" => json_out(self.run_task(args)?),
             "list_skills" => json_out(self.request("skills.list", json!({}))?),
             "read_skill" => {
                 let name = args["name"].as_str().ok_or("name is required")?;
@@ -175,7 +208,7 @@ impl Browser {
     /// Wakes the tab and returns its id. Background tabs are hidden, and
     /// Chromium stalls or drops mouse and key input to hidden pages, so the
     /// app keeps a woken tab drawing behind the selected one for a while.
-    fn wake(&mut self, tab: Option<i64>) -> Result<i64, String> {
+    pub(crate) fn wake(&mut self, tab: Option<i64>) -> Result<i64, String> {
         let id = self.resolve(tab)?;
         let info = self.request("tabs.wake", json!({ "tab_id": id }))?;
         // Let the page become visible before input arrives. Not
@@ -196,8 +229,74 @@ impl Browser {
 
     /// Like `wait_for_load`, giving a load `grace` milliseconds to start. A
     /// click or a submitted form may run script before it navigates.
-    fn wait_for_load_within(&mut self, id: i64, grace: u64) -> Result<Value, String> {
-        self.request("tabs.wait_load", json!({ "tab_id": id, "grace_ms": grace, "timeout_ms": LOAD_TIMEOUT.as_millis() as u64 }))
+    pub(crate) fn wait_for_load_within(&mut self, id: i64, grace: u64) -> Result<Value, String> {
+        self.wait_for_load_up_to(id, grace, LOAD_TIMEOUT)
+    }
+
+    pub(crate) fn wait_for_load_up_to(&mut self, id: i64, grace: u64, timeout: Duration) -> Result<Value, String> {
+        self.request("tabs.wait_load", json!({ "tab_id": id, "grace_ms": grace, "timeout_ms": timeout.as_millis() as u64 }))
+    }
+
+    /// Before reading: waits, for at most READ_LOAD_WAIT, on a load in
+    /// progress, since until it commits the old page is still there.
+    pub(crate) fn wait_if_loading(&mut self, id: i64) -> Result<(), String> {
+        if self.request("tabs.info", json!({ "tab_id": id }))?["loading"] == true {
+            self.wait_for_load_up_to(id, 0, READ_LOAD_WAIT)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled.as_ref().is_some_and(|cancelled| cancelled())
+    }
+
+    /// Runs one of page.js's operations, failing with the error it returns.
+    pub(crate) fn page(&mut self, id: i64, op: &str, arg: Value) -> Result<Value, String> {
+        let value = self.evaluate(id, &format!("({PAGE_JS})({}, {arg})", json!(op)))?;
+        match value["error"].as_str() {
+            Some(error) => Err(error.to_string()),
+            None => Ok(value),
+        }
+    }
+
+    /// The page's text and elements, for read_page and `read`. Waits a moment
+    /// for a load in progress first, and reads again once if a navigation took
+    /// the page away mid-read.
+    fn read(&mut self, id: i64, args: &Value) -> Result<Value, String> {
+        let arg = json!({
+            "max": args["max_chars"].as_u64().unwrap_or(20_000),
+            "viewport": args["viewport"].as_bool().unwrap_or(false),
+        });
+        self.wait_if_loading(id)?;
+        match self.page(id, "read", arg.clone()) {
+            Ok(page) => Ok(page),
+            Err(_) => {
+                self.wait_for_load_up_to(id, 0, READ_LOAD_WAIT)?;
+                self.page(id, "read", arg)
+            }
+        }
+    }
+
+    /// With `read` set, lets the page react to the input and adds the page as
+    /// it is now to `info`, saving the agent a read_page.
+    fn read_after(&mut self, id: i64, target: Option<&Value>, typed: bool, args: &Value, mut info: Value) -> Result<Value, String> {
+        if args["read"].as_bool().unwrap_or(false) {
+            // A navigation may have taken the page away: then there is nothing to settle.
+            let _ = self.page(id, "settle", json!({ "target": target, "typed": typed }));
+            info["page"] = self.read(id, args)?;
+        }
+        Ok(info)
+    }
+
+    /// A left click at the point `locate` returned.
+    pub(crate) fn click_at(&mut self, id: i64, point: &Value) -> Result<(), String> {
+        let (Some(x), Some(y)) = (point["x"].as_f64(), point["y"].as_f64()) else {
+            return Err("the element has no position on the page".into());
+        };
+        self.mouse(id, "mouseMoved", x, y)?;
+        self.mouse(id, "mousePressed", x, y)?;
+        self.mouse(id, "mouseReleased", x, y)?;
+        Ok(())
     }
 
     fn mouse(&mut self, id: i64, kind: &str, x: f64, y: f64) -> Result<Value, String> {
@@ -210,7 +309,7 @@ impl Browser {
     }
 
     /// Runs `expression` in the page and returns its value.
-    fn evaluate(&mut self, id: i64, expression: &str) -> Result<Value, String> {
+    pub(crate) fn evaluate(&mut self, id: i64, expression: &str) -> Result<Value, String> {
         let reply = self.cdp(id, "Runtime.evaluate", json!({
             "expression": expression,
             "returnByValue": true,
@@ -224,13 +323,13 @@ impl Browser {
         Ok(reply["result"].get("value").cloned().unwrap_or(Value::Null))
     }
 
-    fn cdp(&mut self, id: i64, method: &str, params: Value) -> Result<Value, String> {
+    pub(crate) fn cdp(&mut self, id: i64, method: &str, params: Value) -> Result<Value, String> {
         self.request("cdp", json!({ "tab_id": id, "method": method, "params": params }))
     }
 
     /// One request to the app. Retries once on a fresh connection, in case the
     /// app restarted since the last call.
-    fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    pub(crate) fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         match self.try_request(method, &params) {
             Err(Failure::Connection(_)) => {
                 self.conn = None;
@@ -344,84 +443,12 @@ fn json_out(value: Value) -> Result<Output, String> {
     Ok(Output::Json(value))
 }
 
-/// The CSS selector for a tool's `ref` or `selector` argument.
-fn target_selector(args: &Value) -> Result<String, String> {
-    let reference = match &args["ref"] {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        _ => None,
-    };
-    match (reference, args["selector"].as_str()) {
-        (Some(r), _) => Ok(format!("[data-tiller-ref=\"{}\"]", r.replace(['"', '\\'], ""))),
-        (None, Some(s)) => Ok(s.to_string()),
-        (None, None) => Err("give either ref or selector".into()),
+/// The element a tool's `ref` or `selector` argument names, as page.js takes it.
+fn target(args: &Value) -> Result<Value, String> {
+    match (&args["ref"], args["selector"].as_str()) {
+        (Value::String(r), _) => Ok(json!({ "ref": r.trim().trim_start_matches('[').trim_end_matches(']') })),
+        (Value::Number(n), _) => Ok(json!({ "ref": n.to_string() })),
+        (_, Some(s)) => Ok(json!({ "selector": s })),
+        _ => Err("give either ref or selector".into()),
     }
 }
-
-/// Numbers the page's visible interactive elements by setting a
-/// `data-tiller-ref` attribute on each, and returns them with the page text.
-const READ_PAGE_JS: &str = r#"(max) => {
-  const selector = 'a[href], button, input:not([type=hidden]), select, textarea, summary, [contenteditable=""], [contenteditable=true], [role=button], [role=link], [role=checkbox], [role=radio], [role=tab], [role=menuitem], [role=option], [role=switch], [role=textbox], [role=combobox], [onclick]';
-  document.querySelectorAll('[data-tiller-ref]').forEach(el => el.removeAttribute('data-tiller-ref'));
-  const elements = [];
-  for (const el of document.querySelectorAll(selector)) {
-    if (elements.length >= 400) break;
-    const rect = el.getBoundingClientRect();
-    const style = getComputedStyle(el);
-    if (rect.width === 0 || rect.height === 0 || style.visibility === 'hidden' || el.disabled) continue;
-    const ref = String(elements.length + 1);
-    el.setAttribute('data-tiller-ref', ref);
-    const tag = el.tagName.toLowerCase();
-    // A password field's value never goes into the result; `filled` says
-    // whether it holds anything.
-    const secret = tag === 'input' && el.type === 'password';
-    const value = secret ? '' : el.value;
-    const label = (el.getAttribute('aria-label') || el.innerText || value || el.placeholder || el.title || el.getAttribute('alt') || '')
-      .replace(/\s+/g, ' ').trim().slice(0, 100);
-    const item = { ref, tag, text: label };
-    if (tag === 'input') item.type = el.type;
-    if (secret) item.filled = !!el.value;
-    if (el.getAttribute('role')) item.role = el.getAttribute('role');
-    if (tag === 'a') item.href = el.href;
-    if (rect.bottom < 0 || rect.top > innerHeight) item.offscreen = true;
-    elements.push(item);
-  }
-  const text = document.body ? document.body.innerText : '';
-  return { url: location.href, title: document.title, text: text.slice(0, max), truncated: text.length > max, elements };
-}"#;
-
-/// Scrolls the element to the middle of the viewport and returns its center in
-/// viewport coordinates, which is what DevTools mouse events use. The scroll is
-/// instant even on pages with CSS smooth scrolling, so the rect is the final one.
-const LOCATE_JS: &str = r#"(selector) => {
-  const el = document.querySelector(selector);
-  if (!el) return null;
-  el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-  const rect = el.getBoundingClientRect();
-  const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
-  const hit = document.elementFromPoint(x, y);
-  return { x, y, covered: !!hit && hit !== el && !el.contains(hit) };
-}"#;
-
-/// Focuses the element and selects its content, so typed text replaces it
-/// unless `append` is set.
-const FOCUS_JS: &str = r#"(selector, append) => {
-  const el = document.querySelector(selector);
-  if (!el) return false;
-  el.scrollIntoView({ block: 'center', behavior: 'instant' });
-  el.focus();
-  if (append) {
-    if (typeof el.setSelectionRange === 'function' && typeof el.value === 'string') {
-      try { el.setSelectionRange(el.value.length, el.value.length); } catch {}
-    }
-  } else if (typeof el.select === 'function') {
-    el.select();
-  } else if (el.isContentEditable) {
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    const sel = getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-  }
-  return true;
-}"#;

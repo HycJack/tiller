@@ -235,8 +235,11 @@ enum Settings {
 /// marked Sendable.
 struct ProfileSettings: @unchecked Sendable {
     let defaults: UserDefaults
+    /// The profile's id, which keys in the Keychain are kept under.
+    let profileID: String
 
     init(profileID: String) {
+        self.profileID = profileID
         defaults = Profiles.defaults(for: profileID)
     }
 

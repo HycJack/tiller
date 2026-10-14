@@ -21,6 +21,7 @@ https://github.com/user-attachments/assets/1960eca0-6cb0-460b-bb6f-b292b739a147
 - **Profiles.** Each profile has its own site data, history, passwords, settings and chats, and runs as its own app instance.
 - **Agent panel.** Chat with Qoder CLI, Claude Code, Codex, Antigravity CLI or Grok Build in a side panel that controls the browser, and call skills with `/`, from your own folders or a skill library each agent shares. Prompts can also run on a schedule, skills included, set up in Settings or by asking the agent.
 - **Browser tools.** A stdio MCP server and the `tiller` command-line tool expose the same tools to external agents and scripts.
+- **Fast tasks with Jev.** Agents can hand a short task on a page, such as filling a search form, to TypeSafe's Jev, which picks each click and field in a few hundred milliseconds.
 
 ## Requirements
 
@@ -82,6 +83,7 @@ tiller new example.com      # open a tab and wait for the load
 tiller read                 # page text with numbered links, buttons and fields
 tiller click 3
 tiller type 5 "hello" --submit
+tiller run "Find one-way flights from Zurich to London on 20 September"
 ```
 
 See [Browser tools](docs/tools.md) for every tool, command and option.
@@ -101,8 +103,8 @@ See [Browser tools](docs/tools.md) for every tool, command and option.
 | Guide | Covers |
 |---|---|
 | [Using the browser](docs/browser.md) | Tabs, find and zoom, address bar, history, saved passwords, Chrome import, profiles |
-| [Agent panel](docs/agent.md) | Chats, image attachments, skills, scheduled prompts, agent permissions, Codex isolation |
-| [Browser tools](docs/tools.md) | MCP server, command-line tool, debug launch arguments |
+| [Agent panel](docs/agent.md) | Chats, image attachments, skills, scheduled prompts, agent permissions, handing tasks to Jev, Codex isolation |
+| [Browser tools](docs/tools.md) | MCP server, command-line tool, run_task, debug launch arguments |
 | [Settings and data](docs/settings-and-data.md) | Settings, Chromium switches, data folder, environment variables, migrations |
 
 ## License

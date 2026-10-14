@@ -14,8 +14,8 @@ final class ControlDeferred {
 }
 
 /// Answers tiller_mcp's tab requests (list, open, select, navigate, close) and
-/// skill requests (list, read, save) and schedule requests (list, save,
-/// delete, run) for one profile, on its control socket. DevTools calls on the
+/// skill requests (list, read, save), schedule requests (list, save,
+/// delete, run) and run_task's model requests (`jev.*`) for one profile, on its control socket. DevTools calls on the
 /// same socket never reach Swift; the core sends them to the profile's tab
 /// directly. `app.open` opens a profile, for a second launch of Tiller to
 /// pass on what it was asked.
@@ -65,6 +65,8 @@ final class ControlServer {
                         result = try AgentSkillCatalog.control(method, params: params, profile: profile)
                     } else if method.hasPrefix("schedules.") {
                         result = try AgentScheduleControl.control(method, params: params, profile: profile)
+                    } else if method.hasPrefix("jev.") {
+                        result = try JevControl.control(method, params: params, profile: profile)
                     } else {
                         guard let browser = profile.window else { throw ControlError("no browser window is open") }
                         result = try browser.control(method, params: params)

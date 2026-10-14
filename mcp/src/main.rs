@@ -4,29 +4,58 @@
 
 use tiller_mcp::browser::{Browser, Output};
 use serde_json::{Value, json};
-use std::io::{self, BufRead, Write};
+use std::{
+    collections::HashSet,
+    io::{self, BufRead, Write},
+    sync::{Arc, Mutex, mpsc},
+    thread,
+};
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const INSTRUCTIONS: &str = "Controls the Tiller web browser the user is looking at. \
 Call read_page to see a page's text and its numbered interactive elements, then pass \
-an element's ref to click or type. Tools act on the selected tab unless given a tab_id.";
+an element's ref to click, type or select. Pass read true to an action to get the page \
+back with it. Tools act on the selected tab unless given a tab_id.";
+
+/// Requests the client cancelled, by id, and whether it closed stdin.
+#[derive(Default)]
+struct Cancels {
+    ids: HashSet<String>,
+    closed: bool,
+}
 
 fn main() -> io::Result<()> {
-    let mut browser = Browser::default();
-    let stdin = io::stdin();
-    let mut stdout = io::stdout().lock();
-    for line in stdin.lock().lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
+    // Requests are read on their own thread, so a cancellation, or the agent
+    // going away, reaches a run_task still working on an earlier one.
+    let cancels = Arc::new(Mutex::new(Cancels::default()));
+    let (sender, requests) = mpsc::channel::<Value>();
+    let reader_cancels = cancels.clone();
+    thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            let Ok(req) = serde_json::from_str::<Value>(&line) else { continue };
+            if req["method"] == "notifications/cancelled" {
+                reader_cancels.lock().unwrap().ids.insert(req["params"]["requestId"].to_string());
+            } else if sender.send(req).is_err() {
+                break;
+            }
         }
-        let Ok(req) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
+        reader_cancels.lock().unwrap().closed = true;
+    });
+
+    let mut browser = Browser::default();
+    let mut stdout = io::stdout().lock();
+    for req in requests {
         // Notifications have no id and get no reply.
         let Some(id) = req.get("id").cloned() else {
             continue;
         };
+        let key = id.to_string();
+        let watched = cancels.clone();
+        browser.cancelled = Some(Box::new(move || {
+            let cancels = watched.lock().unwrap();
+            cancels.closed || cancels.ids.contains(&key)
+        }));
         let method = req["method"].as_str().unwrap_or_default();
         let result = match method {
             "initialize" => Ok(json!({
@@ -36,7 +65,7 @@ fn main() -> io::Result<()> {
                 "instructions": INSTRUCTIONS,
             })),
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": tools() })),
+            "tools/list" => Ok(json!({ "tools": tools(&browser.jev_status()) })),
             "tools/call" => {
                 let name = req["params"]["name"].as_str().unwrap_or_default();
                 let args = req["params"].get("arguments").cloned().unwrap_or_else(|| json!({}));
@@ -53,16 +82,20 @@ fn main() -> io::Result<()> {
         };
         writeln!(stdout, "{reply}")?;
         stdout.flush()?;
+        cancels.lock().unwrap().ids.remove(&id.to_string());
     }
     Ok(())
 }
 
-fn tools() -> Value {
+/// The tools to offer. run_task only with Jev set up in Settings > Jev,
+/// and saying so when it can't type.
+fn tools(jev: &str) -> Value {
     let tab_id = json!({ "type": "integer", "description": "Tab id from list_tabs. Defaults to the selected tab." });
     let target = json!({
         "ref": { "type": "string", "description": "Element ref from the latest read_page." },
         "selector": { "type": "string", "description": "CSS selector, used when there is no ref." },
     });
+    let read = json!({ "type": "boolean", "description": "Also return the page as read_page would, once it has reacted, in `page`. Default false." });
     let with = |extra: Value| {
         let mut props = target.clone();
         props["tab_id"] = tab_id.clone();
@@ -71,7 +104,7 @@ fn tools() -> Value {
         }
         props
     };
-    json!([
+    let mut tools = json!([
         {
             "name": "list_tabs",
             "description": "Lists open tabs with their id, URL, title, loading state, whether the page is loaded and which one is selected. Tabs that aren't loaded (restored at launch or unloaded to save memory) load when a tool acts on them.",
@@ -105,30 +138,49 @@ fn tools() -> Value {
         },
         {
             "name": "read_page",
-            "description": "Returns the page's URL, title, visible text and a numbered list of its links, buttons and form fields. Pass an element's ref to click or type. Refs change every time read_page runs.",
+            "description": "Returns the page's URL, title, text and a numbered list of its links, buttons and form fields, with their labels, current values, checked or expanded state and a dropdown's options. Pass an element's ref to click, type or select. An element keeps its ref while it stays on the page.",
             "inputSchema": { "type": "object", "properties": {
                 "tab_id": tab_id,
                 "max_chars": { "type": "integer", "description": "Longest text to return. Default 20000." },
+                "viewport": { "type": "boolean", "description": "Only the text and elements visible without scrolling, plus the scroll position. Default false." },
             } },
         },
         {
             "name": "click",
             "description": "Scrolls an element into view and clicks its center with a real mouse event, then waits for any page load it starts.",
-            "inputSchema": { "type": "object", "properties": with(json!({})) },
+            "inputSchema": { "type": "object", "properties": with(json!({ "read": read })) },
         },
         {
             "name": "type",
-            "description": "Types text into a form field or editable element, replacing what is there unless append is true. Without ref or selector, types into whatever has focus.",
+            "description": "Clicks a form field or editable element and types text into it, replacing what is there unless append is true. Without ref or selector, types into whatever has focus.",
             "inputSchema": { "type": "object", "properties": with(json!({
                 "text": { "type": "string" },
                 "append": { "type": "boolean", "description": "Keep the field's current text. Default false." },
                 "submit": { "type": "boolean", "description": "Press Enter afterwards. Default false." },
+                "read": read,
             })), "required": ["text"] },
+        },
+        {
+            "name": "select",
+            "description": "Picks an option of a dropdown (<select>) by its value or label, as read_page lists them.",
+            "inputSchema": { "type": "object", "properties": with(json!({
+                "option": { "type": "string", "description": "The option's value or label." },
+                "read": read,
+            })), "required": ["option"] },
         },
         {
             "name": "screenshot",
             "description": "Captures the visible part of a tab as a JPEG image.",
             "inputSchema": { "type": "object", "properties": { "tab_id": tab_id } },
+        },
+        {
+            "name": "run_task",
+            "description": "Hands a task on the page to TypeSafe's Jev, a fast model that picks each click, field and option itself: getting somewhere, such as opening a result, a story's comments or a page behind a menu, or setting something up, such as filling and submitting a form or setting filters. Prefer it to clicking and typing step by step. Give the whole goal with every value it needs. Works on the visible page, and can't handle frames, file uploads, canvas or pop-up windows. Returns each step taken and a status: done, blocked, out_of_steps, stopped or error. Done is Jev's judgement: check the result with read_page.",
+            "inputSchema": { "type": "object", "properties": {
+                "goal": { "type": "string", "description": "What to achieve on this page, with every value to enter, such as \"Search one-way flights from Zurich to London on 20 September 2026 for one adult\"." },
+                "max_steps": { "type": "integer", "minimum": 1, "maximum": 60, "description": "Most actions to take. Default 30." },
+                "tab_id": tab_id,
+            }, "required": ["goal"] },
         },
         {
             "name": "list_skills",
@@ -206,7 +258,18 @@ fn tools() -> Value {
                 "tab_id": tab_id,
             }, "required": ["expression"] },
         },
-    ])
+    ]);
+    let list = tools.as_array_mut().unwrap();
+    match jev {
+        "ready" => {}
+        "click_only" => {
+            let run_task = list.iter_mut().find(|t| t["name"] == "run_task").unwrap();
+            let description = format!("{} It can't type into fields here, since no text model is set up: give it only goals that need no typing.", run_task["description"].as_str().unwrap_or_default());
+            run_task["description"] = json!(description);
+        }
+        _ => list.retain(|t| t["name"] != "run_task"),
+    }
+    tools
 }
 
 fn content(output: Output) -> Value {

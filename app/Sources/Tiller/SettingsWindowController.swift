@@ -2,7 +2,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 /// A profile's Settings window (Cmd+,), with General, Passwords, Extensions,
-/// Agent, Providers, Skills, Scheduled and Profiles panes. Every change is
+/// Agent, Providers, Jev, Skills, Scheduled and Profiles panes. Every change is
 /// saved as it is made, in the profile, except the appearance, accent color,
 /// agent shortcut, updates, remote debugging and extensions, which every
 /// profile shares.
@@ -22,6 +22,7 @@ final class SettingsWindowController: NSWindowController {
             (ExtensionsSettingsPane(profile: profile), "puzzlepiece.extension"),
             (AgentSettingsPane(profile: profile), "sparkles"),
             (ProvidersSettingsPane(profile: profile), "server.rack"),
+            (JevSettingsPane(profile: profile), "bolt"),
             (SkillsSettingsPane(profile: profile), "wand.and.stars"),
             (ScheduledSettingsPane(profile: profile), "calendar.badge.clock"),
             (ProfilesSettingsPane(profile: profile), "person.2"),
