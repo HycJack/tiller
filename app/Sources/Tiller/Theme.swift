@@ -79,8 +79,6 @@ enum Theme {
         static let card: CGFloat = 10
         /// Floating plates, bubbles and chips.
         static let plate: CGFloat = 14
-        /// The agent panel's message field, taller than a plate.
-        static let composer: CGFloat = 16
         /// The start page's site tiles.
         static let tile: CGFloat = 18
     }
