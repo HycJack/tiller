@@ -1011,7 +1011,8 @@ final class Composer: NSView {
         guard let layer else { return }
         let focused = window?.firstResponder === textView
         let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        layer.cornerRadius = Theme.Radius.composer
+        // The same corners as the skill picker that opens above it.
+        layer.cornerRadius = Theme.Radius.plate
         layer.cornerCurve = .continuous
         // See-through over the panel's material, unless Reduce Transparency is on.
         let background: NSColor = isDropTarget ? Theme.accent(0.08)
@@ -1032,13 +1033,13 @@ final class Composer: NSView {
         }
         // A path keeps the shadow off the offscreen pass AppKit would
         // otherwise render the card's contents in to find its outline.
-        layer.shadowPath = CGPath(roundedRect: bounds, cornerWidth: Theme.Radius.composer, cornerHeight: Theme.Radius.composer, transform: nil)
+        layer.shadowPath = CGPath(roundedRect: bounds, cornerWidth: Theme.Radius.plate, cornerHeight: Theme.Radius.plate, transform: nil)
         layer.masksToBounds = false
     }
 
     override func layout() {
         super.layout()
-        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: Theme.Radius.composer, cornerHeight: Theme.Radius.composer, transform: nil)
+        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: Theme.Radius.plate, cornerHeight: Theme.Radius.plate, transform: nil)
     }
 
     /// Clicks anywhere in the card that isn't a control go to the text.
@@ -1149,11 +1150,19 @@ final class SendButton: NSButton {
             ink = .white
         case (.send, false):
             fill = Theme.fill(Theme.Fill.pressed)
-            ink = NSColor.labelColor.dynamic(alpha: 0.35)
+            ink = NSColor.labelColor.dynamic(alpha: 0.45)
         }
-        var image: NSImage?
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            image = Self.glyph(for: mode, color: ink)
+        // Hover and press redraw often, the glyph only per state and appearance.
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let key = "\(mode)-\(isEnabled)-\(dark)"
+        var image = Self.glyphs[key]
+        if image == nil {
+            // A fixed color, since the image would resolve a dynamic one
+            // whenever, and in whichever appearance, it is drawn.
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                image = Self.glyph(for: mode, color: NSColor(cgColor: ink.cgColor) ?? ink)
+            }
+            Self.glyphs[key] = image
         }
         let scale: CGFloat = isHighlighted && isEnabled ? 0.9 : 1
         withEasing(Theme.Duration.quick) {
@@ -1164,6 +1173,8 @@ final class SendButton: NSButton {
         glyph.contents = image
         glyph.contentsScale = window?.backingScaleFactor ?? 2
     }
+
+    private static var glyphs: [String: NSImage] = [:]
 
     private static func glyph(for mode: Mode, color: NSColor) -> NSImage? {
         let name = mode == .stop ? "stop.fill" : "arrow.up"
