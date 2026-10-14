@@ -41,8 +41,10 @@ enum AgentRecord: Codable, Equatable, Sendable {
     case user(text: String, images: [String])
     /// `date` is when the text came, nil in transcripts saved before texts had one.
     case text(String, date: Date? = nil)
-    /// `isError` is nil for a call that never finished.
-    case tool(name: String, detail: String, isError: Bool?, summary: String)
+    /// `isError` is nil for a call that never finished. `full` is the
+    /// call's input past what `detail` keeps, nil when there is no more or
+    /// in transcripts saved before calls kept it.
+    case tool(name: String, detail: String, isError: Bool?, summary: String, full: String? = nil)
     case note(String)
     case error(String)
 }

@@ -426,9 +426,9 @@ private final class ThumbnailRemoveButton: NSButton {
 }
 
 /// One tool call: a spinner, then a check or a cross, beside the tool and
-/// what it acted on. A running call shows a few lines of its arguments; a
-/// finished one keeps a single line. A failed call adds the first line of
-/// its error. With `disclosure`, the row is the clickable header of a
+/// what it acted on. A running call shows its arguments on a few lines under
+/// its name; a finished one keeps a single line. A failed call adds the
+/// first line of its error. The whole input shows on hover. With `disclosure`, the row is the clickable header of a
 /// `ToolGroupView`, with a chevron for its state.
 final class ToolRowView: NSView, TranscriptRow {
     enum Outcome { case running, done, failed, unfinished }
@@ -457,12 +457,15 @@ final class ToolRowView: NSView, TranscriptRow {
     private let icon = NSImageView()
     private let label = NSTextField(wrappingLabelWithString: "")
     private let chevron: NSImageView?
+    private var detail: String
     private var heading: NSAttributedString
 
-    /// `detail` is what `detail(_:)` made of the call's input. A `finished`
-    /// row, as a saved chat's are, starts with its outcome and never spins.
-    init(name: String, detail: String, disclosure: Bool = false, finished: (isError: Bool?, summary: String)? = nil) {
+    /// `detail` is what `detail(_:)` made of the call's input, and `full`
+    /// what `full(_:detail:)` did. A `finished` row, as a saved chat's are,
+    /// starts with its outcome and never spins.
+    init(name: String, detail: String, full: String? = nil, disclosure: Bool = false, finished: (isError: Bool?, summary: String)? = nil) {
         tool = Self.tool(name)
+        self.detail = detail
         heading = Self.heading(tool: tool, detail: detail)
         chevron = disclosure ? NSImageView(image: Self.chevronImage(expanded: false)!) : nil
         super.init(frame: .zero)
@@ -472,12 +475,15 @@ final class ToolRowView: NSView, TranscriptRow {
         spinner.controlSize = .mini
         spinner.isDisplayedWhenStopped = false
         icon.isHidden = true
-        label.attributedStringValue = heading
-        label.maximumNumberOfLines = disclosure ? 1 : 4
-        label.lineBreakMode = .byTruncatingTail
         // Without this, a line cut by the limit ends at a word break with no
         // ellipsis when the text would have wrapped there.
         label.cell?.truncatesLastVisibleLine = true
+        if !disclosure, let tip = full ?? (detail.isEmpty ? nil : detail) {
+            // The label covers most of the row, and a tooltip is the view's
+            // under the mouse.
+            toolTip = tip
+            label.toolTip = tip
+        }
         for view in [spinner, icon, label] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
@@ -514,6 +520,7 @@ final class ToolRowView: NSView, TranscriptRow {
         if let finished {
             finish(isError: finished.isError, summary: finished.summary)
         } else {
+            showHeading()
             spinner.startAnimation(nil)
         }
     }
@@ -527,9 +534,21 @@ final class ToolRowView: NSView, TranscriptRow {
     /// Changes what the row says. A group header counts its calls as they come.
     func update(name: String, detail: String) {
         tool = Self.tool(name)
+        self.detail = detail
         heading = Self.heading(tool: tool, detail: detail)
-        label.attributedStringValue = heading
+        showHeading()
         setAccessibilityLabel(heading.string)
+    }
+
+    /// A running call's arguments get lines of their own under its name,
+    /// broken anywhere, as a script has few spaces to break at. Otherwise
+    /// they follow the name on one line, cut at its end.
+    private func showHeading() {
+        let running = outcome == .running && chevron == nil && !detail.isEmpty
+        label.attributedStringValue = running ? Self.heading(tool: tool, detail: detail, separator: "\n") : heading
+        label.lineBreakMode = running ? .byCharWrapping : .byTruncatingTail
+        label.maximumNumberOfLines = running ? 4 : 1
+        label.invalidateIntrinsicContentSize()
     }
 
     /// A group header spins only while one of its calls runs; between
@@ -568,7 +587,7 @@ final class ToolRowView: NSView, TranscriptRow {
         case false?: .done
         case nil: .unfinished
         }
-        label.maximumNumberOfLines = 1
+        showHeading()
         if isError == true, !summary.isEmpty {
             let text = NSMutableAttributedString(attributedString: heading)
             text.append(NSAttributedString(string: "\n" + summary, attributes: [
@@ -577,6 +596,7 @@ final class ToolRowView: NSView, TranscriptRow {
             ]))
             label.attributedStringValue = text
             label.maximumNumberOfLines = 3
+            label.invalidateIntrinsicContentSize()
         }
         onFinish?()
     }
@@ -710,13 +730,13 @@ final class ToolRowView: NSView, TranscriptRow {
         }
     }
 
-    private static func heading(tool: String, detail: String) -> NSAttributedString {
+    private static func heading(tool: String, detail: String, separator: String = "  ") -> NSAttributedString {
         let text = NSMutableAttributedString(string: displayName(of: tool), attributes: [
             .font: NSFont.systemFont(ofSize: 12, weight: .medium),
             .foregroundColor: NSColor.labelColor,
         ])
         if !detail.isEmpty {
-            text.append(NSAttributedString(string: "  " + detail, attributes: [
+            text.append(NSAttributedString(string: separator + detail, attributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
                 .foregroundColor: NSColor.secondaryLabelColor,
             ]))
@@ -733,6 +753,19 @@ final class ToolRowView: NSView, TranscriptRow {
     /// URLs lose their scheme and scripts their line breaks, so a row's one
     /// line holds what matters.
     static func detail(_ input: [String: Any]) -> String {
+        let string = parts(input).joined(separator: " ").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return string.count > 80 ? String(string.prefix(80)) + "…" : string
+    }
+
+    /// The same arguments whole, line breaks kept, for the row's tooltip:
+    /// nil when `detail` already shows them all.
+    static func full(_ input: [String: Any], detail: String) -> String? {
+        let string = parts(input).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard string != detail else { return nil }
+        return string.count > 2000 ? String(string.prefix(2000)) + "…" : string
+    }
+
+    private static func parts(_ input: [String: Any]) -> [String] {
         var parts: [String] = []
         if let url = input["url"] {
             var address = "\(url)"
@@ -748,15 +781,15 @@ final class ToolRowView: NSView, TranscriptRow {
         if parts.isEmpty, let tab = input["tab_id"] { parts.append("tab \(tab)") }
         // A skill or schedule by name.
         if parts.isEmpty, let name = input["name"] { parts.append("\(name)") }
-        let string = parts.joined(separator: " ").split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return string.count > 80 ? String(string.prefix(80)) + "…" : string
+        return parts
     }
 }
 
 /// A run of tool calls between messages, under a header that counts them.
-/// The calls show while the run is under way and fold under the header when
-/// it ends; clicking the header shows them again. A run of one call is just
-/// that call, with no header.
+/// While the run is under way only its newest call shows, each taking the
+/// last one's place, and all of them fold under the header when it ends;
+/// clicking the header shows every call. A run of one call is just that
+/// call, with no header.
 final class ToolGroupView: NSView, TranscriptRow {
     private let header = ToolRowView(name: "", detail: "", disclosure: true)
     private let stack = NSStackView()
@@ -787,7 +820,7 @@ final class ToolGroupView: NSView, TranscriptRow {
             toggled = true
             setExpanded(!header.isExpanded)
         }
-        header.isExpanded = true
+        header.toolTip = "Show steps"
         rowsLeading = rows.leadingAnchor.constraint(equalTo: stack.leadingAnchor)
         rowsWidth = rows.widthAnchor.constraint(equalTo: stack.widthAnchor)
         NSLayoutConstraint.activate([
@@ -813,7 +846,16 @@ final class ToolGroupView: NSView, TranscriptRow {
         rowsWidth.constant = -indent
         if width > 0 { fit(width: width) }
         updateHeader()
+        if isPeeking, calls.count > 1, window != nil, !Theme.reduceMotion {
+            // It takes the last call's place, fading in rather than popping.
+            call.alphaValue = 0
+            withEasing(Theme.Duration.quick) { call.animator().alphaValue = 1 }
+        }
     }
+
+    /// While the run is under way and the user hasn't opened or closed the
+    /// header, the newest call shows below it.
+    private var isPeeking: Bool { isOpen && !toggled && !header.isExpanded }
 
     /// The run ended: the header takes its outcome and the calls fold away.
     func close() {
@@ -838,7 +880,13 @@ final class ToolGroupView: NSView, TranscriptRow {
     private func updateHeader() {
         // One call has no header to reopen it from, so it stays in view.
         header.isHidden = calls.count < 2
-        let hideRows = !header.isExpanded && calls.count > 1
+        let hideRows = !header.isExpanded && !isPeeking && calls.count > 1
+        if !hideRows {
+            // Left alone while the rows fold, so they don't grow as they fade.
+            for (index, call) in calls.enumerated() {
+                call.isHidden = isPeeking && index < calls.count - 1
+            }
+        }
         if rows.isHidden && !hideRows {
             // Shown again from the header, the calls fade in rather than pop.
             rows.alphaValue = 0

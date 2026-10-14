@@ -11,6 +11,11 @@ beta shows what `## Unreleased` holds at the time.
   starts without extensions and says so, with a link to Extensions
   settings. An extension that opens a tab as Tiller starts could
   otherwise crash it at every launch, before it could be switched off.
+- While the agent works through a run of steps, the chat shows only its
+  newest step under the step count instead of a growing list; click the
+  count to see them all. A running script or command gets lines of its
+  own instead of wrapping word by word, a finished step keeps one line,
+  and hovering a step shows its whole input.
 
 ## 0.2.2
 

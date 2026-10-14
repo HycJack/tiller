@@ -884,16 +884,17 @@ final class AgentChatView: NSView, NSTextViewDelegate {
             saveRecords()
         case .toolUse(let id, let name, let input):
             let detail = ToolRowView.detail(input)
-            let row = ToolRowView(name: name, detail: detail)
-            records.append(.tool(name: name, detail: detail, isError: nil, summary: ""))
+            let full = ToolRowView.full(input, detail: detail)
+            let row = ToolRowView(name: name, detail: detail, full: full)
+            records.append(.tool(name: name, detail: detail, isError: nil, summary: "", full: full))
             saveRecords()
             toolRows[id] = (row, records.count - 1)
             transcript.add(row)
         case .toolResult(let id, let isError, let summary):
             guard let (row, index) = toolRows.removeValue(forKey: id) else { break }
             row.finish(isError: isError, summary: summary)
-            if case .tool(let name, let detail, _, _) = records[index] {
-                records[index] = .tool(name: name, detail: detail, isError: isError, summary: summary)
+            if case .tool(let name, let detail, _, _, let full) = records[index] {
+                records[index] = .tool(name: name, detail: detail, isError: isError, summary: summary, full: full)
                 saveRecords()
             }
             // The agent is deciding what to do with the result.
@@ -1155,8 +1156,8 @@ final class AgentChatView: NSView, NSTextViewDelegate {
             }
         case .text(let text, _):
             row = AgentMarkdown.label(text)
-        case .tool(let name, let detail, let isError, let summary):
-            row = ToolRowView(name: name, detail: detail, finished: (isError, summary))
+        case .tool(let name, let detail, let isError, let summary, let full):
+            row = ToolRowView(name: name, detail: detail, full: full, finished: (isError, summary))
         case .note(let text):
             row = NoteView(text: text)
         case .error(let text):
