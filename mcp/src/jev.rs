@@ -273,12 +273,39 @@ enum Stop {
     Done,
     Blocked(String),
     Budget(String),
-    Stopped,
+    /// Cancelled by the agent, or by the user with the page's Stop button.
+    Stopped(&'static str),
     Failed(String),
 }
 
-/// A decision no longer about the page as it is: read again and decide anew.
-struct Stale;
+/// What became of an action `execute` was asked to take.
+enum Acted {
+    Done,
+    /// The page no longer matches the decision, and nothing was done: read
+    /// it again and decide anew.
+    Stale,
+    /// The user pressed Stop before it was taken.
+    Stopped,
+}
+
+const STOPPED_BY_AGENT: &str = "the call was cancelled";
+const STOPPED_BY_USER: &str = "the user stopped it in Tiller";
+
+/// One line on how a run ended, such as `Done in 2.4 s, 5 steps`, for the
+/// first line of run_task's result and the app's view of the run.
+pub fn summary(result: &Value) -> String {
+    let steps = result["steps"].as_array().map_or(0, Vec::len);
+    let count = format!("{steps} step{}", if steps == 1 { "" } else { "s" });
+    let seconds = result["elapsed_ms"].as_u64().unwrap_or(0) as f64 / 1000.0;
+    let reason = result["reason"].as_str().unwrap_or_default();
+    match result["status"].as_str().unwrap_or_default() {
+        "done" => format!("Done in {seconds:.1} s, {count}"),
+        "blocked" => format!("Blocked after {count}: {reason}"),
+        "out_of_steps" => format!("Out of steps: {reason}"),
+        "stopped" => format!("Stopped after {count}: {reason}"),
+        _ => format!("Error after {count}: {reason}"),
+    }
+}
 
 impl Browser {
     /// Which of run_task's keys the app has: "ready", "click_only" when it
@@ -298,7 +325,17 @@ impl Browser {
         let id = self.wake(args["tab_id"].as_i64())?;
         let started = Instant::now();
         let ms = |since: Instant| since.elapsed().as_millis() as u64;
-        let mut page = self.observe(id)?;
+        // The app shows the run over the page, step by step, with a Stop
+        // button; `report` says when it was pressed.
+        let run = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+        self.report(&run, json!({ "phase": "start", "tab_id": id, "goal": goal }));
+        let mut page = match self.observe(id) {
+            Ok(page) => page,
+            Err(e) => {
+                self.report(&run, json!({ "phase": "end", "status": "error", "summary": format!("Error: {e}") }));
+                return Err(e);
+            }
+        };
         let mut history: Vec<Value> = Vec::new();
         let mut decisions = 0;
         let mut text_calls = 0;
@@ -308,10 +345,13 @@ impl Browser {
 
         let stop = loop {
             if self.is_cancelled() {
-                break Stop::Stopped;
+                break Stop::Stopped(STOPPED_BY_AGENT);
             }
             if decisions >= max_steps * 2 {
                 break Stop::Budget(format!("made {decisions} decisions without finishing"));
+            }
+            if self.report(&run, json!({ "phase": "thinking", "steps": history.len() })) {
+                break Stop::Stopped(STOPPED_BY_USER);
             }
             let space = action_space(&page);
             let body = decision_body(&page, &space, &goal, &history);
@@ -325,13 +365,16 @@ impl Browser {
                 Err(e) => break Stop::Failed(e),
             };
             if self.is_cancelled() {
-                break Stop::Stopped;
+                break Stop::Stopped(STOPPED_BY_AGENT);
             }
 
             // Completion and anything not tied to one element must still be
             // about the page as it is.
             if !matches!(action.kind, Kind::Click | Kind::Select) {
-                let now = self.observe(id)?;
+                let now = match self.observe(id) {
+                    Ok(now) => now,
+                    Err(e) => break Stop::Failed(e),
+                };
                 if now["marker"] != page["marker"] {
                     page = now;
                     continue;
@@ -359,6 +402,9 @@ impl Browser {
                     Some((asked, value)) if *asked == context => value.clone(),
                     _ => {
                         text_calls += 1;
+                        if self.report(&run, json!({ "phase": "writing", "steps": history.len(), "action": format!("Writing what goes into {}", json!(action.name)) })) {
+                            break Stop::Stopped(STOPPED_BY_USER);
+                        }
                         let reply = match self.request("jev.text", json!({ "system": TEXT_VALUE, "user": context })) {
                             Ok(reply) => reply,
                             Err(e) => break Stop::Failed(e),
@@ -371,7 +417,10 @@ impl Browser {
                 };
                 pending_text = Some((context, value.clone()));
                 // The page may have moved on while the text was written.
-                let now = self.observe(id)?;
+                let now = match self.observe(id) {
+                    Ok(now) => now,
+                    Err(e) => break Stop::Failed(e),
+                };
                 if now["marker"] != page["marker"] {
                     page = now;
                     continue;
@@ -380,13 +429,19 @@ impl Browser {
             }
 
             if self.is_cancelled() {
-                break Stop::Stopped;
+                break Stop::Stopped(STOPPED_BY_AGENT);
             }
-            self.wake(Some(id))?;
-            match self.execute(id, &page, &action, text.as_deref()) {
-                Ok(Ok(())) => {}
-                Ok(Err(Stale)) => {
-                    page = self.observe(id)?;
+            if let Err(e) = self.wake(Some(id)) {
+                break Stop::Failed(e);
+            }
+            match self.execute(id, &run, history.len(), &page, &action, text.as_deref()) {
+                Ok(Acted::Done) => {}
+                Ok(Acted::Stopped) => break Stop::Stopped(STOPPED_BY_USER),
+                Ok(Acted::Stale) => {
+                    page = match self.observe(id) {
+                        Ok(page) => page,
+                        Err(e) => break Stop::Failed(e),
+                    };
                     continue;
                 }
                 // Whether the input landed isn't known: stop rather than try again.
@@ -405,8 +460,13 @@ impl Browser {
             }));
             let before = page["marker"].clone();
             let _ = self.page(id, "settle", json!({ "target": action.reference.as_ref().map(|r| json!({ "ref": r })), "typed": action.kind == Kind::Fill }));
-            self.wait_if_loading(id)?;
-            page = self.observe(id)?;
+            if let Err(e) = self.wait_if_loading(id) {
+                break Stop::Failed(e);
+            }
+            page = match self.observe(id) {
+                Ok(page) => page,
+                Err(e) => break Stop::Failed(e),
+            };
             let changed = page["marker"] != before;
             history.last_mut().unwrap()["page_changed"] = json!(changed);
             let last: Vec<&Value> = history.iter().rev().take(3).collect();
@@ -422,7 +482,7 @@ impl Browser {
             Stop::Done => ("done", None),
             Stop::Blocked(reason) => ("blocked", Some(reason)),
             Stop::Budget(reason) => ("out_of_steps", Some(reason)),
-            Stop::Stopped => ("stopped", Some("the call was cancelled".to_string())),
+            Stop::Stopped(why) => ("stopped", Some(why.to_string())),
             Stop::Failed(reason) => ("error", Some(reason)),
         };
         let mut result = json!({
@@ -442,7 +502,16 @@ impl Browser {
         } else {
             "Continue with read_page and the other tools, or call run_task again with a narrower goal."
         });
+        self.report(&run, json!({ "phase": "end", "status": status, "steps": history.len(), "summary": summary(&result) }));
         Ok(result)
+    }
+
+    /// Tells the app how run `run` is going, and answers whether the user
+    /// pressed Stop. An app that can't be told, such as an older one, never
+    /// stops a run.
+    fn report(&mut self, run: &str, mut update: Value) -> bool {
+        update["run"] = json!(run);
+        self.request("jev.progress", update).is_ok_and(|reply| reply["stop"] == true)
     }
 
     /// The visible page for a decision, read again after a navigation took
@@ -460,15 +529,29 @@ impl Browser {
         Err(format!("couldn't read the page: {last}"))
     }
 
-    /// Runs one action. Stale when the page no longer matches the decision,
-    /// before anything was done; an error when what happened isn't known.
-    fn execute(&mut self, id: i64, page: &Value, action: &Action, text: Option<&str>) -> Result<Result<(), Stale>, String> {
+    /// Runs one action, once the app has been told about it. Stale when the
+    /// page no longer matches the decision, before anything was done; an
+    /// error when what happened isn't known.
+    fn execute(&mut self, id: i64, run: &str, steps: usize, page: &Value, action: &Action, text: Option<&str>) -> Result<Acted, String> {
         let target = action.reference.as_ref().map(|r| json!({ "ref": r, "url": page["url"] }));
+        // Where the element is, so the app can mark it, and whether the user
+        // stopped the run meanwhile.
+        let announce = |browser: &mut Self, point: Option<&Value>| {
+            let mut update = json!({ "phase": "act", "steps": steps, "kind": kind_name(&action.kind), "action": describe(action, text) });
+            if let Some(point) = point {
+                update["rect"] = point["rect"].clone();
+                update["dpr"] = point["dpr"].clone();
+            }
+            browser.report(run, update)
+        };
         match action.kind {
             Kind::Click | Kind::Fill => {
-                let Ok(point) = self.page(id, "locate", json!({ "target": target, "scroll": false })) else { return Ok(Err(Stale)) };
+                let Ok(point) = self.page(id, "locate", json!({ "target": target, "scroll": false })) else { return Ok(Acted::Stale) };
                 if point["covered"] == true {
-                    return Ok(Err(Stale));
+                    return Ok(Acted::Stale);
+                }
+                if announce(self, Some(&point)) {
+                    return Ok(Acted::Stopped);
                 }
                 self.click_at(id, &point)?;
                 if let Some(text) = text {
@@ -478,13 +561,20 @@ impl Browser {
             }
             Kind::Select => {
                 let option = action.value.clone().unwrap_or_default();
+                let point = self.page(id, "locate", json!({ "target": target, "scroll": false })).ok();
+                if announce(self, point.as_ref()) {
+                    return Ok(Acted::Stopped);
+                }
                 // The page script checks the element and option before it
                 // changes anything, so a refusal changed nothing.
                 if self.page(id, "select", json!({ "target": target, "option": option, "scroll": false })).is_err() {
-                    return Ok(Err(Stale));
+                    return Ok(Acted::Stale);
                 }
             }
             Kind::Scroll(delta) => {
+                if announce(self, None) {
+                    return Ok(Acted::Stopped);
+                }
                 let scroll = &page["scroll"];
                 let x = scroll["width"].as_f64().unwrap_or(800.0) / 2.0;
                 let y = scroll["viewport"].as_f64().unwrap_or(600.0) / 2.0;
@@ -492,11 +582,14 @@ impl Browser {
             }
             // Waits a while for a load in progress, else a moment.
             Kind::Wait => {
+                if announce(self, None) {
+                    return Ok(Acted::Stopped);
+                }
                 self.wait_for_load_up_to(id, 100, READ_LOAD_WAIT)?;
             }
             Kind::Done | Kind::Blocked => {}
         }
-        Ok(Ok(()))
+        Ok(Acted::Done)
     }
 }
 
@@ -651,6 +744,17 @@ mod tests {
         assert_eq!(repeating(&history).as_deref(), Some("open"));
         let waits = vec![json!({ "action": "wait", "kind": "wait" }); 4];
         assert_eq!(repeating(&waits), None);
+    }
+
+    #[test]
+    fn sums_up_a_run() {
+        let steps = |n: usize| json!(vec![json!({}); n]);
+        assert_eq!(summary(&json!({ "status": "done", "steps": steps(5), "elapsed_ms": 2412 })), "Done in 2.4 s, 5 steps");
+        assert_eq!(
+            summary(&json!({ "status": "blocked", "steps": steps(1), "reason": "it kept repeating x" })),
+            "Blocked after 1 step: it kept repeating x"
+        );
+        assert_eq!(summary(&json!({ "status": "stopped", "steps": steps(0), "reason": STOPPED_BY_USER })), format!("Stopped after 0 steps: {STOPPED_BY_USER}"));
     }
 
     #[test]

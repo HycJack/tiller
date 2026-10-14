@@ -196,8 +196,9 @@
     if (arg.scroll !== false) e.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     const rect = e.getBoundingClientRect();
     const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
-    const hit = document.elementFromPoint(x, y);
-    return { x, y, covered: covered(e, x, y), editable: editable(e) };
+    // The box, with the zoom, lets the app show where run_task acts.
+    return { x, y, covered: covered(e, x, y), editable: editable(e), dpr: devicePixelRatio,
+      rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height } };
   }
 
   if (op === 'focus') {

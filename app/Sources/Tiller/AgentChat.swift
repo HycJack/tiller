@@ -97,6 +97,9 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     private var liveTextStale = false
     /// Running tool calls: their rows and where they are in `records`.
     private var toolRows: [String: (row: ToolRowView, record: Int)] = [:]
+    /// run_task calls under way, by goal, which is how the window's reports
+    /// of a run find them.
+    private var jevRows: [String: ToolRowView] = [:]
     private let quickLook = QuickLookItems()
     /// Brings the newest message back into view after scrolling up.
     private let scrollDownButton = ScrollDownButton()
@@ -292,6 +295,7 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(transcriptScrolled(_:)), name: NSView.boundsDidChangeNotification, object: scrollView.contentView
         )
+        NotificationCenter.default.addObserver(self, selector: #selector(jevRunChanged(_:)), name: .jevRunDidChange, object: nil)
 
         emptyState.onSuggestion = { [weak self] text in self?.send(text) }
 
@@ -983,9 +987,13 @@ final class AgentChatView: NSView, NSTextViewDelegate {
             records.append(.tool(name: name, detail: detail, isError: nil, summary: "", full: full))
             saveRecords()
             toolRows[id] = (row, records.count - 1)
+            if row.tool == "run_task", let goal = input["goal"] as? String {
+                jevRows[goal.trimmingCharacters(in: .whitespacesAndNewlines)] = row
+            }
             transcript.add(row)
         case .toolResult(let id, let isError, let summary):
             guard let (row, index) = toolRows.removeValue(forKey: id) else { break }
+            jevRows = jevRows.filter { $0.value !== row }
             row.finish(isError: isError, summary: summary)
             if case .tool(let name, let detail, _, _, let full) = records[index] {
                 records[index] = .tool(name: name, detail: detail, isError: isError, summary: summary, full: full)
@@ -1108,10 +1116,17 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         pinnedResponse = view
     }
 
+    /// A run_task call of this chat's moved on: its row says what Jev is doing.
+    @objc private func jevRunChanged(_ notification: Notification) {
+        guard let run = notification.object as? JevRun, let row = jevRows[run.goal], run.isRunning else { return }
+        row.showProgress(run.activity)
+    }
+
     /// Calls still running when the agent ended get a mark of their own.
     private func finishToolRows() {
         for (row, _) in toolRows.values { row.finish(isError: nil, summary: "") }
         toolRows.removeAll()
+        jevRows.removeAll()
     }
 
     /// Claude Code and Qoder CLI may name the session in their own files.

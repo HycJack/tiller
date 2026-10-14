@@ -261,10 +261,7 @@ fn run(args: Vec<String>) -> Result<(), Error> {
                 println!("{:>6} ms  {}{changed}", step["at_ms"], step["action"].as_str().unwrap_or_default());
             }
             let status = value["status"].as_str().unwrap_or_default();
-            println!("{status} after {} ms, {} decisions", value["elapsed_ms"], value["decisions"]);
-            if let Some(reason) = value["reason"].as_str() {
-                println!("reason: {reason}");
-            }
+            println!("{} ({} decisions)", tiller_mcp::jev::summary(&value), value["decisions"]);
             println!("{}  {}", value["title"].as_str().unwrap_or_default(), value["url"].as_str().unwrap_or_default());
             if status != "done" {
                 return Err(Error::Failed(format!("the task ended {status}")));

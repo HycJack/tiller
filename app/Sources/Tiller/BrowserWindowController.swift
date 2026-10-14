@@ -74,6 +74,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     private var chromeImport: ChromeImportController?
     /// The link under the mouse, at the bottom left of the page.
     private let statusBubble = StatusBubbleView()
+    /// run_task at work on the selected tab: its step, a Stop button and a
+    /// ring on what it acts on.
+    private lazy var jevOverlay = JevOverlay(
+        container: contentView,
+        selectedTab: { [weak self] in self?.selectedTab?.id },
+        hostView: { [weak self] id in self?.tabs.first { $0.id == id }?.hostView }
+    )
     /// The tab whose page has the whole screen, while one does.
     private var fullscreenTab: Tab?
     /// Whether the window was in full screen already when the page took the
@@ -302,8 +309,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         if tab !== selectedTab {
             contentView.addSubview(tab.hostView, positioned: .above, relativeTo: nil)
             contentView.addSubview(statusBubble, positioned: .above, relativeTo: nil)
+            jevOverlay.bringToFront()
         }
+        let changed = tab !== selectedTab
         selectedTab = tab
+        if changed { jevOverlay.selectionChanged() }
         tab.lastActive = Date()
         tab.hostView.isHidden = false
         start(tab)
@@ -422,6 +432,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         if tab === fullscreenTab { self.tab(tab, fullscreenChanged: false) }
         wakeTimers.removeValue(forKey: ObjectIdentifier(tab))?.cancel()
         failLoadWaits(for: tab)
+        jevOverlay.tabClosed(tab.id)
         tab.detach()
         // Tearing down the view is what lets CEF finish closing the browser.
         tab.hostView.removeFromSuperview()
@@ -1618,6 +1629,8 @@ extension BrowserWindowController {
         case "tabs.list":
             // Tabs that aren't loaded stay that way until a tool acts on them.
             return ["tabs": tabs.map(info)]
+        case "jev.progress":
+            return try jevOverlay.progress(params)
         case "tabs.info":
             // One tab's info, such as whether it is loading, without loading it.
             return info(try tab(for: params))

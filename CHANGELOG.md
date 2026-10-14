@@ -7,6 +7,13 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+- While Jev works on a page, the page shows the step it is on, the time so
+  far and a Stop button, and rings each field and button before it acts on
+  it. The agent's chat shows the step under the task, and once it ends
+  whether it got there, with its step count and time, or why it stopped.
+- Settings > Jev says whether agents get `run_task` and what is missing,
+  links to where keys come from, and Check Keys tries both keys and shows
+  how long each model took to answer.
 - Agents hand getting somewhere or setting something up on a page, such
   as opening a story's comments, filling a search form or setting
   filters, to TypeSafe's Jev with the new `run_task` tool, or
