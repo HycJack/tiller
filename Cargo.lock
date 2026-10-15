@@ -1050,7 +1050,7 @@ dependencies = [
 
 [[package]]
 name = "tiller-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cef",
  "objc2",
@@ -1062,14 +1062,14 @@ dependencies = [
 
 [[package]]
 name = "tiller-helper"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cef",
 ]
 
 [[package]]
 name = "tiller-mcp"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde_json",
 ]

@@ -7,6 +7,8 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+## 0.3.1
+
 - Pages can use the camera and microphone. A site asking for them gets a
   card at the top of the page with Block, Allow Once and Always Allow;
   saved choices are listed in the new Settings > Sites pane. Tabs that
