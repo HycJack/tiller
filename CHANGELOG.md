@@ -7,6 +7,8 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+## 0.3.2
+
 - Themes: Settings > General > Theme gives Tiller Claude's colors,
   Anthropic's ivory or warm near-black with Claude's orange, or Qoder's
   Forest greens, each light or dark as the appearance is. The window,
