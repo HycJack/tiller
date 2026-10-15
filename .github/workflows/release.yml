@@ -33,7 +33,9 @@ jobs:
           rustup toolchain install stable --profile minimal
           brew install ninja zstd
 
-      - uses: actions/cache@v4
+      # A tag's run can't read the caches of other tags, only its own and
+      # main's, which cef-cache.yml saves.
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.local/share/cef

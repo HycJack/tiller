@@ -1,0 +1,30 @@
+# Downloads CEF into a cache saved on main whenever fetch-cef.sh changes. The
+# Release workflow runs on tags, which can read main's caches but not each
+# other's, so without this every release downloads CEF again.
+name: CEF cache
+
+on:
+  push:
+    branches: [main]
+    paths: [scripts/fetch-cef.sh]
+  workflow_dispatch:
+
+jobs:
+  cache:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+
+      - run: |
+          rustup toolchain install stable --profile minimal
+          brew install ninja zstd
+
+      # The key has to match release.yml's.
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.local/share/cef
+            ~/.local/share/cef-codecs
+          key: cef-${{ hashFiles('scripts/fetch-cef.sh') }}
+
+      - run: scripts/fetch-cef.sh
