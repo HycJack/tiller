@@ -80,7 +80,7 @@ final class StartPageView: NSView {
         icon.heightAnchor.constraint(equalToConstant: 72).isActive = true
         let hint = NSTextField(labelWithString: "Search or enter a website in the address bar.")
         hint.font = .systemFont(ofSize: Theme.FontSize.body)
-        hint.textColor = .secondaryLabelColor
+        hint.textColor = Theme.secondaryText
         emptyHint.orientation = .vertical
         emptyHint.spacing = 14
         emptyHint.addArrangedSubview(icon)
@@ -123,7 +123,7 @@ final class StartPageView: NSView {
     private static func heading(_ text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: Theme.FontSize.body, weight: .semibold)
-        label.textColor = .secondaryLabelColor
+        label.textColor = Theme.secondaryText
         return label
     }
 
@@ -144,7 +144,7 @@ final class StartPageView: NSView {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        layer?.backgroundColor = NSColor.windowBackgroundColor.layerColor
+        layer?.backgroundColor = Theme.background.layerColor
         let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         let tint = Theme.accent(dark ? 0.09 : 0.05)
         glow.colors = [tint.layerColor, NSColor.clear.layerColor]
@@ -381,7 +381,7 @@ private final class SiteTile: ClickableView {
 
         let name = NSTextField(labelWithString: site.host)
         name.font = .systemFont(ofSize: Theme.FontSize.secondary)
-        name.textColor = .secondaryLabelColor
+        name.textColor = Theme.secondaryText
         name.alignment = .center
         name.lineBreakMode = .byTruncatingTail
         // A host a little too long for the tile draws tighter before it is cut.
@@ -492,7 +492,7 @@ private final class ClosedTabRow: ClickableView {
         let icon = FaviconView()
         // A site without a favicon shows the globe, as it does in the tab strip.
         icon.image = Theme.symbol("globe", size: Theme.Symbol.row, weight: .regular)
-        icon.contentTintColor = .secondaryLabelColor
+        icon.contentTintColor = Theme.secondaryText
         history.icon(for: tab.url) { [weak icon] png in
             guard let png, let image = NSImage(data: png) else { return }
             image.size = NSSize(width: 16, height: 16)
@@ -504,7 +504,7 @@ private final class ClosedTabRow: ClickableView {
         title.setContentCompressionResistancePriority(.defaultLow - 1, for: .horizontal)
         let address = NSTextField(labelWithString: HistoryStore.bare(tab.url))
         address.font = .systemFont(ofSize: Theme.FontSize.secondary)
-        address.textColor = .secondaryLabelColor
+        address.textColor = Theme.secondaryText
         address.lineBreakMode = .byTruncatingTail
         address.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let stack = NSStackView(views: [icon, title, address])

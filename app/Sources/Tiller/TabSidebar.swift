@@ -69,6 +69,6 @@ final class ChromeSplitView: NSSplitView {
     }
 
     override var dividerColor: NSColor {
-        hidesDividers ? .clear : super.dividerColor
+        hidesDividers ? .clear : Settings.theme == .tiller ? super.dividerColor : Theme.hairline
     }
 }

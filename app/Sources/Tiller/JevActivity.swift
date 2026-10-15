@@ -328,13 +328,13 @@ final class JevActivityView: NSView {
         title.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         activity.font = .systemFont(ofSize: Theme.FontSize.secondary)
-        activity.textColor = .secondaryLabelColor
+        activity.textColor = Theme.secondaryText
         activity.lineBreakMode = .byTruncatingTail
         activity.maximumNumberOfLines = 1
         activity.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         clock.font = .monospacedDigitSystemFont(ofSize: Theme.FontSize.caption, weight: .regular)
-        clock.textColor = .tertiaryLabelColor
+        clock.textColor = Theme.tertiaryText
         clock.setContentHuggingPriority(.required, for: .horizontal)
         clock.setContentCompressionResistancePriority(.required, for: .horizontal)
 
@@ -344,12 +344,12 @@ final class JevActivityView: NSView {
         stopButton.plateRadius = 10
         stopButton.attributedTitle = NSAttributedString(string: "Stop", attributes: [
             .font: NSFont.systemFont(ofSize: Theme.FontSize.caption, weight: .medium),
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: Theme.text,
         ])
         stopButton.image = Theme.symbol("stop.fill", size: 8, weight: .bold)
         stopButton.imagePosition = .imageLeading
         stopButton.imageHugsTitle = true
-        stopButton.contentTintColor = .labelColor
+        stopButton.contentTintColor = Theme.text
         stopButton.toolTip = "Stop the task after the step under way"
         stopButton.setAccessibilityLabel("Stop Jev")
         stopButton.target = self
@@ -365,7 +365,7 @@ final class JevActivityView: NSView {
         row.edgeInsets = NSEdgeInsets(top: 0, left: 6, bottom: 0, right: 6)
         glass.contentView = row
         glass.cornerRadius = 17
-        glass.tintColor = NSColor.windowBackgroundColor.dynamic(alpha: 0.6)
+        glass.tintColor = Theme.background.dynamic(alpha: 0.6)
         glass.translatesAutoresizingMaskIntoConstraints = false
         addSubview(glass)
         NSLayoutConstraint.activate([
@@ -398,16 +398,16 @@ final class JevActivityView: NSView {
         running = run.isRunning
         let (symbol, color): (String, NSColor) = switch run.status {
         case nil: ("bolt.fill", Theme.accentColor)
-        case "done": ("checkmark", .systemGreen)
-        case "blocked", "out_of_steps": ("exclamationmark", .systemOrange)
-        case "stopped": ("stop.fill", .secondaryLabelColor)
-        default: ("xmark", .systemRed)
+        case "done": ("checkmark", Theme.success)
+        case "blocked", "out_of_steps": ("exclamationmark", Theme.warning)
+        case "stopped": ("stop.fill", Theme.secondaryText)
+        default: ("xmark", Theme.danger)
         }
         icon.image = Theme.symbol(symbol, size: run.status == "stopped" ? 9 : 11, weight: .bold)
         icon.contentTintColor = run.isRunning ? .white : color
         badge.layer?.backgroundColor = (run.isRunning ? color : color.withAlphaComponent(0.18)).layerColor
         activity.stringValue = run.isRunning ? run.activity : Self.ending(run)
-        activity.textColor = run.isRunning || run.status == "done" ? .secondaryLabelColor : .labelColor
+        activity.textColor = run.isRunning || run.status == "done" ? Theme.secondaryText : Theme.text
         activity.toolTip = run.goal.isEmpty ? nil : "Goal: " + run.goal
         stopButton.isHidden = !run.isRunning
         stopButton.isEnabled = !run.stopRequested

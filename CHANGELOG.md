@@ -7,6 +7,12 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+- Themes: Settings > General > Theme gives Tiller Claude's colors,
+  Anthropic's ivory or warm near-black with Claude's orange, or Qoder's
+  Forest greens, each light or dark as the appearance is. The window,
+  sidebar, toolbar, agent panel and start page take the theme's colors
+  and accent; Tiller's own theme keeps the system's look.
+
 ## 0.3.1
 
 - Pages can use the camera and microphone. A site asking for them gets a

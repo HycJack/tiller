@@ -118,6 +118,36 @@ enum Appearance: String, CaseIterable {
     }
 }
 
+/// The colors of Tiller's windows: its own, which are the system's, or
+/// Claude's or Qoder's, each light or dark as the appearance is.
+enum ChromeTheme: String, CaseIterable {
+    case tiller
+    case claude
+    case qoder
+
+    var displayName: String {
+        switch self {
+        case .tiller: "Tiller"
+        case .claude: "Claude"
+        case .qoder: "Qoder"
+        }
+    }
+
+    /// The theme's accent, for its swatch in Settings: under Tiller's own,
+    /// the accent chosen there.
+    var swatchColor: NSColor {
+        NSColor(name: nil) { appearance in
+            let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            if let palette = Palette.of(self, dark: dark) { return palette.accent }
+            var color = NSColor.controlAccentColor
+            appearance.performAsCurrentDrawingAppearance {
+                color = Settings.accentTheme.color.usingColorSpace(.sRGB) ?? color
+            }
+            return color
+        }
+    }
+}
+
 /// The color Tiller's own tinted surfaces use: selections, the message
 /// bubble, busy dots and the start page's wash. AppKit's controls, such as
 /// focus rings and text selection, keep the system accent either way.
@@ -175,6 +205,26 @@ enum Settings {
         get { defaults.string(forKey: "appearance").flatMap(Appearance.init) ?? .system }
         set {
             defaults.set(newValue.rawValue, forKey: "appearance")
+            NotificationCenter.default.post(name: .themeDidChange, object: nil)
+        }
+    }
+
+    /// The theme last read or set. Every themed color resolves it each time
+    /// it is drawn, from any thread, so it skips the defaults lookup.
+    private static let cachedTheme = OSAllocatedUnfairLock<ChromeTheme?>(initialState: nil)
+
+    static var theme: ChromeTheme {
+        get {
+            cachedTheme.withLock { cached in
+                if let cached { return cached }
+                let theme = defaults.string(forKey: "theme").flatMap(ChromeTheme.init) ?? .tiller
+                cached = theme
+                return theme
+            }
+        }
+        set {
+            cachedTheme.withLock { $0 = newValue }
+            defaults.set(newValue.rawValue, forKey: "theme")
             NotificationCenter.default.post(name: .themeDidChange, object: nil)
         }
     }
@@ -430,6 +480,6 @@ extension Notification.Name {
     static let agentTabsDidChange = Notification.Name("TillerAgentTabsDidChange")
     /// Posted when a profile's `tabLayout` changes.
     static let tabLayoutDidChange = Notification.Name("TillerTabLayoutDidChange")
-    /// Posted when `Settings.appearance` or `Settings.accentTheme` changes.
+    /// Posted when `Settings.appearance`, `Settings.theme` or `Settings.accentTheme` changes.
     static let themeDidChange = Notification.Name("TillerThemeDidChange")
 }

@@ -148,7 +148,7 @@ private final class TabNumberButton: NSView {
         label.font = .monospacedDigitSystemFont(ofSize: Theme.FontSize.secondary, weight: .medium)
         label.alignment = .center
         closeIcon.image = Theme.closeImage(size: 9, label: "Close Chat")
-        closeIcon.contentTintColor = .labelColor
+        closeIcon.contentTintColor = Theme.text
         closeIcon.isHidden = true
         busyDot.wantsLayer = true
         busyDot.layer?.cornerRadius = Theme.busyDot / 2
@@ -196,7 +196,7 @@ private final class TabNumberButton: NSView {
         // Contrast the others get a hairline, as a faint fill alone won't show.
         layer?.borderWidth = isSelected || Theme.increaseContrast ? Theme.hairlineWidth : 0
         layer?.borderColor = (isSelected ? Theme.accent(Theme.Accent.outline) : Theme.hairline).layerColor
-        label.textColor = isSelected ? .labelColor : .secondaryLabelColor
+        label.textColor = isSelected ? Theme.text : Theme.secondaryText
         busyDot.layer?.backgroundColor = Theme.accentColor.layerColor
     }
 
@@ -308,7 +308,7 @@ final class AgentHistoryController: NSViewController, NSTableViewDataSource, NST
         scroll.drawsBackground = false
 
         emptyLabel.font = .systemFont(ofSize: Theme.FontSize.secondary)
-        emptyLabel.textColor = .secondaryLabelColor
+        emptyLabel.textColor = Theme.secondaryText
 
         let view = NSView()
         for subview in [header, scroll, emptyLabel] {
@@ -501,14 +501,14 @@ private final class HistoryCellView: NSView {
         super.init(frame: .zero)
         let icon = NSImageView(image: logo ?? NSImage(systemSymbolName: "bubble.left", accessibilityDescription: nil)!
             .withSymbolConfiguration(.init(pointSize: 14, weight: .regular))!)
-        if logo == nil { icon.contentTintColor = isCurrent ? Theme.accentColor : .secondaryLabelColor }
+        if logo == nil { icon.contentTintColor = isCurrent ? Theme.accentColor : Theme.secondaryText }
         let titleLabel = NSTextField(labelWithString: title)
         titleLabel.font = .systemFont(ofSize: Theme.FontSize.body, weight: .medium)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let subtitleLabel = NSTextField(labelWithString: subtitle)
         subtitleLabel.font = .systemFont(ofSize: Theme.FontSize.caption)
-        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.textColor = Theme.secondaryText
         subtitleLabel.lineBreakMode = .byTruncatingTail
         subtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         for view in [icon, titleLabel, subtitleLabel] {

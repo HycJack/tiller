@@ -145,7 +145,7 @@ private final class SkillPickerRow: NSView {
         name.lineBreakMode = .byTruncatingTail
         name.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
         hint.font = .systemFont(ofSize: Theme.FontSize.caption)
-        hint.textColor = .tertiaryLabelColor
+        hint.textColor = Theme.tertiaryText
         // Never cut: a hint broken mid-token misleads, so `layout()` hides
         // it when it doesn't fit whole. It gives way to the row's width, and
         // under the split view's holding priority, so a long hint can't
@@ -154,13 +154,13 @@ private final class SkillPickerRow: NSView {
         hint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         hint.isHidden = !hasHint
         badge.font = .systemFont(ofSize: Theme.FontSize.caption, weight: .medium)
-        badge.textColor = .secondaryLabelColor
+        badge.textColor = Theme.secondaryText
         badge.isHidden = skill.origin != .library
         let top = NSStackView(views: [name, hint, NSView(), badge])
         top.spacing = Self.spacing
         let description = NSTextField(labelWithString: skill.description.isEmpty ? " " : skill.description)
         description.font = .systemFont(ofSize: Theme.FontSize.caption)
-        description.textColor = .secondaryLabelColor
+        description.textColor = Theme.secondaryText
         description.lineBreakMode = .byTruncatingTail
         description.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let stack = NSStackView(views: [top, description])
@@ -212,7 +212,7 @@ private final class SkillPickerRow: NSView {
         layer?.borderWidth = Theme.hairlineWidth
         layer?.borderColor = Theme.selectionOutline(selected: isSelected).layerColor
         // Tertiary text is too faint on the accent's wash.
-        hint.textColor = isSelected || Theme.increaseContrast ? .secondaryLabelColor : .tertiaryLabelColor
+        hint.textColor = isSelected || Theme.increaseContrast ? Theme.secondaryText : Theme.tertiaryText
     }
 
     override func updateTrackingAreas() {

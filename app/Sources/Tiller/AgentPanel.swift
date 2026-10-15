@@ -511,7 +511,7 @@ private final class StatusPill: NSView {
         dot.wantsLayer = true
         dot.layer?.cornerRadius = Theme.busyDot / 2
         label.font = .systemFont(ofSize: Theme.FontSize.caption)
-        label.textColor = .secondaryLabelColor
+        label.textColor = Theme.secondaryText
         label.lineBreakMode = .byTruncatingTail
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         for view in [dot, label] {
@@ -562,7 +562,7 @@ private final class StatusPill: NSView {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        dot.layer?.backgroundColor = (busy ? Theme.accentColor : NSColor.systemGreen).layerColor
+        dot.layer?.backgroundColor = (busy ? Theme.accentColor : Theme.success).layerColor
     }
 }
 
@@ -604,7 +604,7 @@ final class AgentEmptyState: NSView {
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         subtitle.font = .systemFont(ofSize: Theme.FontSize.secondary)
-        subtitle.textColor = .secondaryLabelColor
+        subtitle.textColor = Theme.secondaryText
         subtitle.alignment = .center
         subtitle.preferredMaxLayoutWidth = Self.subtitleWidth
 
@@ -703,7 +703,7 @@ private final class SuggestionButton: NSView {
         wantsLayer = true
         let icon = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil)!
             .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))!)
-        icon.contentTintColor = .secondaryLabelColor
+        icon.contentTintColor = Theme.secondaryText
         // The symbols differ in width, so each sits centered in a slot of one
         // width and the prompts start at one x.
         icon.imageAlignment = .alignCenter
@@ -863,7 +863,7 @@ final class Composer: NSView {
         modelButton.isEmphasized = !isDefault
         modelButton.toolTip = "Model: " + summary
         modelButton.setAccessibilityValue(summary)
-        toolsButton.contentTintColor = tools.isEmpty ? .secondaryLabelColor : Theme.accentColor
+        toolsButton.contentTintColor = tools.isEmpty ? Theme.secondaryText : Theme.accentColor
         toolsButton.toolTip = tools.isEmpty
             ? "Tools: browser only"
             : "Tools: browser, " + tools.map { $0.displayName.lowercased() }.joined(separator: ", ")
@@ -1016,7 +1016,7 @@ final class Composer: NSView {
         layer.cornerCurve = .continuous
         // See-through over the panel's material, unless Reduce Transparency is on.
         let background: NSColor = isDropTarget ? Theme.accent(0.08)
-            : NSColor.controlBackgroundColor.dynamic(alpha: Theme.reduceTransparency ? 1 : dark ? 0.75 : 0.92)
+            : Theme.surface.dynamic(alpha: Theme.reduceTransparency ? 1 : dark ? 0.75 : 0.92)
         let border: NSColor = isDropTarget ? Theme.accentColor
             : focused ? Theme.accent(Theme.Accent.outline) : Theme.hairline
         // A soft lift off the panel, which focus tints with the accent.
@@ -1143,18 +1143,18 @@ final class SendButton: NSButton {
         let ink: NSColor
         switch (mode, isEnabled) {
         case (.stop, _):
-            fill = .labelColor
-            ink = .windowBackgroundColor
+            fill = Theme.text
+            ink = Theme.chrome
         case (.send, true):
-            fill = Theme.accentColor
-            ink = .white
+            fill = Theme.accentFill
+            ink = Theme.accentFillText
         case (.send, false):
             fill = Theme.fill(Theme.Fill.pressed)
-            ink = NSColor.labelColor.dynamic(alpha: 0.45)
+            ink = Theme.text.dynamic(alpha: 0.45)
         }
         // Hover and press redraw often, the glyph only per state and appearance.
         let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let key = "\(mode)-\(isEnabled)-\(dark)"
+        let key = "\(mode)-\(isEnabled)-\(dark)-\(Settings.theme.rawValue)"
         var image = Self.glyphs[key]
         if image == nil {
             // A fixed color, since the image would resolve a dynamic one
@@ -1241,7 +1241,7 @@ final class ComposerChip: HoverButton {
     required init?(coder: NSCoder) { fatalError() }
 
     private func updateTitle() {
-        let color: NSColor = isEmphasized ? .labelColor : .secondaryLabelColor
+        let color: NSColor = isEmphasized ? Theme.text : Theme.secondaryText
         contentTintColor = color
         attributedTitle = NSAttributedString(string: title, attributes: [
             .font: NSFont.systemFont(ofSize: Theme.FontSize.secondary, weight: .medium),
@@ -1281,7 +1281,7 @@ final class QueuedMessagesView: NSView {
         addSubview(stack)
 
         headerLabel.font = .systemFont(ofSize: Theme.FontSize.caption, weight: .medium)
-        headerLabel.textColor = .secondaryLabelColor
+        headerLabel.textColor = Theme.secondaryText
         headerLabel.lineBreakMode = .byTruncatingTail
         headerLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         sendNowButton.bezelStyle = .accessoryBarAction
@@ -1349,20 +1349,20 @@ private final class QueuedMessageRow: NSView {
         let imageNote = images == 0 ? nil : images == 1 ? "1 image" : "\(images) images"
         let label = NSTextField(labelWithString: firstLine.isEmpty ? imageNote ?? "" : firstLine)
         label.font = .systemFont(ofSize: Theme.FontSize.secondary)
-        label.textColor = firstLine.isEmpty ? .secondaryLabelColor : .labelColor
+        label.textColor = firstLine.isEmpty ? Theme.secondaryText : Theme.text
         label.lineBreakMode = .byTruncatingTail
         label.cell?.truncatesLastVisibleLine = true
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let count = NSTextField(labelWithString: firstLine.isEmpty ? "" : imageNote ?? "")
         count.font = .systemFont(ofSize: Theme.FontSize.caption)
-        count.textColor = .secondaryLabelColor
+        count.textColor = Theme.secondaryText
         count.isHidden = count.stringValue.isEmpty
 
         closeButton.image = Theme.closeImage(size: 8, label: "Remove from Queue")
         closeButton.isBordered = false
         closeButton.bezelStyle = .accessoryBarAction
         closeButton.imagePosition = .imageOnly
-        closeButton.contentTintColor = .secondaryLabelColor
+        closeButton.contentTintColor = Theme.secondaryText
         closeButton.toolTip = "Remove from Queue"
         closeButton.plateRadius = 8
         closeButton.target = self

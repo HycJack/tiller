@@ -209,7 +209,7 @@ final class UserMessageView: NSView, TranscriptRow {
         label = NSTextField(wrappingLabelWithString: text)
         super.init(frame: .zero)
         label.font = .systemFont(ofSize: 13)
-        label.textColor = .labelColor
+        label.textColor = Theme.text
         label.isSelectable = true
         bubble.wantsLayer = true
         bubble.layer?.cornerRadius = Theme.Radius.plate
@@ -526,7 +526,7 @@ final class ToolRowView: NSView, TranscriptRow {
             label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
         ])
         if let chevron {
-            chevron.contentTintColor = .tertiaryLabelColor
+            chevron.contentTintColor = Theme.tertiaryText
             chevron.translatesAutoresizingMaskIntoConstraints = false
             addSubview(chevron)
             NSLayoutConstraint.activate([
@@ -564,7 +564,7 @@ final class ToolRowView: NSView, TranscriptRow {
         heading = Self.heading(name: name, detail: title)
         icon.image = NSImage(systemSymbolName: "brain", accessibilityDescription: "Reasoning")?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
-        icon.contentTintColor = .tertiaryLabelColor
+        icon.contentTintColor = Theme.tertiaryText
         if more {
             body = plain
             onToggle = { [weak self] in
@@ -664,7 +664,7 @@ final class ToolRowView: NSView, TranscriptRow {
             if elapsed >= ThinkingRowView.elapsedDelay {
                 text.append(NSAttributedString(string: "  " + ThinkingRowView.duration(elapsed), attributes: [
                     .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
-                    .foregroundColor: NSColor.tertiaryLabelColor,
+                    .foregroundColor: Theme.tertiaryText,
                 ]))
             }
             if wrapped { text.append(Self.heading(name: "", detail: detail, separator: "\n")) }
@@ -672,13 +672,13 @@ final class ToolRowView: NSView, TranscriptRow {
             text = NSMutableAttributedString(attributedString: heading)
         }
         if running, let progress {
-            text.append(Self.subline(progress.text, color: progress.isOutput ? .secondaryLabelColor : Theme.accentColor, code: progress.isOutput))
+            text.append(Self.subline(progress.text, color: progress.isOutput ? Theme.secondaryText : Theme.accentColor, code: progress.isOutput))
         }
         let open = isExpanded && body != nil
         if open, let body {
             text.append(NSAttributedString(string: "\n" + body, attributes: [
                 .font: NSFont.systemFont(ofSize: 11),
-                .foregroundColor: NSColor.secondaryLabelColor,
+                .foregroundColor: Theme.secondaryText,
             ]))
         }
         label.attributedStringValue = text
@@ -719,7 +719,7 @@ final class ToolRowView: NSView, TranscriptRow {
             spinner.stopAnimation(nil)
             icon.image = NSImage(systemSymbolName: "circle.dashed", accessibilityDescription: "Waiting")?
                 .withSymbolConfiguration(.init(pointSize: Theme.Symbol.row, weight: .medium))
-            icon.contentTintColor = .tertiaryLabelColor
+            icon.contentTintColor = Theme.tertiaryText
             icon.isHidden = false
         }
     }
@@ -737,9 +737,9 @@ final class ToolRowView: NSView, TranscriptRow {
         let ending = isError == false && tool == "run_task" ? Self.taskEnding(summary) : nil
         let (symbol, description, color): (String, String, NSColor) = switch (isError, ending) {
         case (_, (let symbol, let description, let color)?): (symbol, description, color)
-        case (true?, _): ("xmark.circle.fill", "Failed", .systemRed)
-        case (false?, _): ("checkmark.circle.fill", "Done", .tertiaryLabelColor)
-        case (nil, _): ("minus.circle.fill", "Didn't finish", .tertiaryLabelColor)
+        case (true?, _): ("xmark.circle.fill", "Failed", Theme.danger)
+        case (false?, _): ("checkmark.circle.fill", "Done", Theme.tertiaryText)
+        case (nil, _): ("minus.circle.fill", "Didn't finish", Theme.tertiaryText)
         }
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
@@ -754,14 +754,14 @@ final class ToolRowView: NSView, TranscriptRow {
             let text = NSMutableAttributedString(attributedString: heading)
             text.append(NSAttributedString(string: "\n" + summary, attributes: [
                 .font: NSFont.systemFont(ofSize: 11),
-                .foregroundColor: NSColor.systemRed,
+                .foregroundColor: Theme.danger,
             ]))
             label.attributedStringValue = text
             label.maximumNumberOfLines = 3
             label.invalidateIntrinsicContentSize()
         } else if let ending, !summary.isEmpty {
             let text = NSMutableAttributedString(attributedString: heading)
-            text.append(Self.subline(summary, color: ending.color == .tertiaryLabelColor ? .secondaryLabelColor : ending.color))
+            text.append(Self.subline(summary, color: ending.color == Theme.tertiaryText ? Theme.secondaryText : ending.color))
             label.attributedStringValue = text
             label.maximumNumberOfLines = 2
             label.toolTip = [toolTip, summary].compactMap { $0 }.joined(separator: "\n\n")
@@ -774,12 +774,12 @@ final class ToolRowView: NSView, TranscriptRow {
     /// The mark for how a run_task ended, from its result's first line:
     /// tiller_mcp's summary, such as "Done in 2.4 s, 5 steps".
     static func taskEnding(_ summary: String) -> (symbol: String, description: String, color: NSColor)? {
-        if summary.hasPrefix("Done") { return ("checkmark.circle.fill", "Done", .tertiaryLabelColor) }
+        if summary.hasPrefix("Done") { return ("checkmark.circle.fill", "Done", Theme.tertiaryText) }
         if summary.hasPrefix("Blocked") || summary.hasPrefix("Out of steps") {
-            return ("exclamationmark.triangle.fill", "Didn't get there", .systemOrange)
+            return ("exclamationmark.triangle.fill", "Didn't get there", Theme.warning)
         }
-        if summary.hasPrefix("Stopped") { return ("stop.circle.fill", "Stopped", .tertiaryLabelColor) }
-        if summary.hasPrefix("Error") { return ("xmark.circle.fill", "Failed", .systemRed) }
+        if summary.hasPrefix("Stopped") { return ("stop.circle.fill", "Stopped", Theme.tertiaryText) }
+        if summary.hasPrefix("Error") { return ("xmark.circle.fill", "Failed", Theme.danger) }
         return nil
     }
 
@@ -922,12 +922,12 @@ final class ToolRowView: NSView, TranscriptRow {
     private static func heading(name: String, detail: String, separator: String = "  ") -> NSAttributedString {
         let text = NSMutableAttributedString(string: name, attributes: [
             .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: Theme.text,
         ])
         if !detail.isEmpty {
             text.append(NSAttributedString(string: separator + detail, attributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: NSColor.secondaryLabelColor,
+                .foregroundColor: Theme.secondaryText,
             ]))
         }
         return text
@@ -1155,11 +1155,11 @@ final class ThinkingRowView: NSView {
         super.init(frame: .zero)
         let boat = BoatView()
         label.font = .systemFont(ofSize: 12)
-        label.textColor = .secondaryLabelColor
+        label.textColor = Theme.secondaryText
         elapsedLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        elapsedLabel.textColor = .tertiaryLabelColor
+        elapsedLabel.textColor = Theme.tertiaryText
         detailLabel.font = .systemFont(ofSize: 11)
-        detailLabel.textColor = .tertiaryLabelColor
+        detailLabel.textColor = Theme.tertiaryText
         detailLabel.isHidden = true
         for field in [label, detailLabel] {
             field.lineBreakMode = .byTruncatingTail
@@ -1305,8 +1305,8 @@ private final class BoatView: NSView {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        boat.fillColor = NSColor.secondaryLabelColor.cgColor
-        wave.strokeColor = NSColor.tertiaryLabelColor.cgColor
+        boat.fillColor = Theme.secondaryText.cgColor
+        wave.strokeColor = Theme.tertiaryText.cgColor
     }
 
     override func layout() {
@@ -1401,7 +1401,7 @@ final class NoteView: NSView {
         super.init(frame: .zero)
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: Theme.FontSize.caption, weight: .medium)
-        label.textColor = .secondaryLabelColor
+        label.textColor = Theme.secondaryText
         // A long one, such as a scheduled run's name, loses its middle and
         // keeps the whole text in its tooltip.
         label.alignment = .center
@@ -1436,11 +1436,11 @@ final class ErrorMessageView: NSView, TranscriptRow {
         super.init(frame: .zero)
         wantsLayer = true
         label.font = .systemFont(ofSize: 13)
-        label.textColor = .labelColor
+        label.textColor = Theme.text
         label.isSelectable = true
         let icon = NSImageView(image: NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Error")!
             .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))!)
-        icon.contentTintColor = .systemRed
+        icon.contentTintColor = Theme.danger
         for view in [icon, label] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
@@ -1464,7 +1464,7 @@ final class ErrorMessageView: NSView, TranscriptRow {
         button.isBordered = false
         button.bezelStyle = .accessoryBarAction
         button.font = .systemFont(ofSize: Theme.FontSize.caption, weight: .medium)
-        button.contentTintColor = .labelColor
+        button.contentTintColor = Theme.text
         let titleWidth = (action.title as NSString).size(withAttributes: [.font: button.font as Any]).width
         button.target = self
         button.action = #selector(run(_:))
@@ -1493,9 +1493,9 @@ final class ErrorMessageView: NSView, TranscriptRow {
     override func updateLayer() {
         layer?.cornerRadius = Theme.Radius.card
         layer?.cornerCurve = .continuous
-        layer?.backgroundColor = NSColor.systemRed.dynamic(alpha: 0.1).layerColor
+        layer?.backgroundColor = Theme.danger.dynamic(alpha: 0.1).layerColor
         layer?.borderWidth = Theme.hairlineWidth
-        layer?.borderColor = NSColor.systemRed.dynamic(alpha: 0.25).layerColor
+        layer?.borderColor = Theme.danger.dynamic(alpha: 0.25).layerColor
     }
 }
 
@@ -1717,7 +1717,7 @@ enum AgentMarkdown {
     /// read as links.
     private static func dim(_ text: NSMutableAttributedString) {
         text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length)) { value, range, _ in
-            if value == nil { text.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: range) }
+            if value == nil { text.addAttribute(.foregroundColor, value: Theme.secondaryText, range: range) }
         }
     }
 
@@ -1894,7 +1894,7 @@ enum AgentMarkdown {
             case .number(let number): "\(number)."
             case .task(let done): done ? "☑" : "☐"
             }
-            let markerColor: NSColor = if case .task = marker { .secondaryLabelColor } else { .labelColor }
+            let markerColor: NSColor = if case .task = marker { Theme.secondaryText } else { Theme.text }
             let text = inline(rest, font: body)
             // A finished task's text is dimmed, so what is left stands out.
             if case .task(true) = marker { dim(text) }
@@ -1926,7 +1926,7 @@ enum AgentMarkdown {
         style.lineSpacing = 1
         return NSAttributedString(string: line.isEmpty ? " " : line, attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: Theme.FontSize.secondary, weight: .regular),
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: Theme.text,
             .backgroundColor: Theme.fill(Theme.Fill.rest),
             .paragraphStyle: style,
         ])
@@ -1939,7 +1939,7 @@ enum AgentMarkdown {
         let result = NSMutableAttributedString(parsed)
         let whole = NSRange(location: 0, length: result.length)
         result.addAttribute(.font, value: font, range: whole)
-        result.addAttribute(.foregroundColor, value: NSColor.labelColor, range: whole)
+        result.addAttribute(.foregroundColor, value: Theme.text, range: whole)
         result.enumerateAttribute(.inlinePresentationIntent, in: whole) { value, range, _ in
             guard let raw = value as? UInt else { return }
             let intent = InlinePresentationIntent(rawValue: raw)
@@ -2125,7 +2125,7 @@ private final class ResponseActionsView: NSView {
         // Tabbing to the button shows the row, so it isn't focused unseen.
         copyButton.onFocusChange = { [weak self] focused in self?.isCopyFocused = focused }
         timeLabel.font = .systemFont(ofSize: Theme.FontSize.caption)
-        timeLabel.textColor = .secondaryLabelColor
+        timeLabel.textColor = Theme.secondaryText
         if let date {
             timeLabel.stringValue = Self.timeText(date)
             timeLabel.toolTip = date.formatted(date: .complete, time: .shortened)
@@ -2465,7 +2465,7 @@ final class MarkdownCodeView: NSView, TranscriptRow {
         wantsLayer = true
 
         languageLabel.font = .systemFont(ofSize: Theme.FontSize.caption, weight: .medium)
-        languageLabel.textColor = .secondaryLabelColor
+        languageLabel.textColor = Theme.secondaryText
 
         copyButton.string = { [weak self] in self?.code ?? "" }
         copyButton.onCopiedChange = { [weak self] in self?.updateButtons() }
@@ -2714,7 +2714,7 @@ private final class CopyButton: FocusReportingButton {
     private func showCopy() {
         image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: name)?
             .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
-        contentTintColor = .secondaryLabelColor
+        contentTintColor = Theme.secondaryText
         toolTip = name
     }
 
@@ -2722,7 +2722,7 @@ private final class CopyButton: FocusReportingButton {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(string(), forType: .string)
         image = Self.copiedImage
-        contentTintColor = .systemGreen
+        contentTintColor = Theme.success
         toolTip = "Copied"
         NSAccessibility.post(element: self, notification: .announcementRequested, userInfo: [
             .announcement: "Copied",
@@ -2789,7 +2789,7 @@ final class MarkdownQuoteView: NSView, TranscriptRow {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        bar.layer?.backgroundColor = NSColor.tertiaryLabelColor.layerColor
+        bar.layer?.backgroundColor = Theme.tertiaryText.layerColor
     }
 }
 

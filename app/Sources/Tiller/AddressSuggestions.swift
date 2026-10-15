@@ -411,9 +411,9 @@ private final class SuggestionRow: NSView {
     }
 
     private func updateColors() {
-        title.attributedStringValue = Self.highlighting(titleText, typed, color: isHighlighted ? .alternateSelectedControlTextColor : .labelColor)
-        url.textColor = isHighlighted ? NSColor.alternateSelectedControlTextColor.dynamic(alpha: 0.75) : .secondaryLabelColor
-        if !showsFavicon { icon.contentTintColor = isHighlighted ? .alternateSelectedControlTextColor : .secondaryLabelColor }
+        title.attributedStringValue = Self.highlighting(titleText, typed, color: isHighlighted ? Theme.selectionText : Theme.text)
+        url.textColor = isHighlighted ? Theme.selectionText.dynamic(alpha: 0.75) : Theme.secondaryText
+        if !showsFavicon { icon.contentTintColor = isHighlighted ? Theme.selectionText : Theme.secondaryText }
     }
 
     required init?(coder: NSCoder) { fatalError() }

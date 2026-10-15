@@ -439,8 +439,11 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
     private var unloadDelayPopUp: NSPopUpButton?
     private var unloadDelayRow: NSGridRow?
     private var templateRow: NSGridRow?
+    private var themePopUp: NSPopUpButton?
     private var appearancePopUp: NSPopUpButton?
     private var accentPopUp: NSPopUpButton?
+    private var accentRow: NSGridRow?
+    private var accentNote: NSTextField?
     private var remoteDebuggingButton: NSButton?
     private var searchPopUp: NSPopUpButton?
     private let templateField = NSTextField()
@@ -508,6 +511,13 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
         Self.setRow(unloadDelayRow, enabled: settings.unloadsInactiveTabs)
         addNote(Self.note("Also when the Mac runs low on memory. An unloaded tab reloads when you select it."))
 
+        let themePopUp = Self.popUp(
+            ChromeTheme.allCases, title: \.displayName, image: { Self.swatch($0.swatchColor) }, selected: Settings.theme,
+            target: self, action: #selector(themeChanged(_:))
+        )
+        self.themePopUp = themePopUp
+        addRow("Theme:", themePopUp)
+
         let appearancePopUp = Self.popUp(
             Appearance.allCases, title: \.displayName, selected: Settings.appearance,
             target: self, action: #selector(appearanceChanged(_:))
@@ -520,8 +530,11 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
             target: self, action: #selector(accentChanged(_:))
         )
         self.accentPopUp = accentPopUp
-        addRow("Accent color:", accentPopUp)
-        addNote(Self.note("Selections, chat bubbles and busy dots. Pages follow the appearance."))
+        accentRow = addRow("Accent color:", accentPopUp)
+        let accentNote = Self.note("")
+        self.accentNote = accentNote
+        addNote(accentNote)
+        showAccentState()
 
         let searchPopUp = Self.popUp(
             SearchEngine.allCases, title: \.displayName, selected: settings.searchEngine,
@@ -532,7 +545,7 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
 
         // One width for them all, so their right edges line up; a longer
         // title can still widen its own.
-        for popUp in [launchPopUp, newTabPopUp, tabLayoutPopUp, unloadDelayPopUp, appearancePopUp, accentPopUp, searchPopUp] {
+        for popUp in [launchPopUp, newTabPopUp, tabLayoutPopUp, unloadDelayPopUp, themePopUp, appearancePopUp, accentPopUp, searchPopUp] {
             popUp.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.popUpWidth).isActive = true
         }
 
@@ -578,8 +591,10 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
         unloadTabsButton?.state = settings.unloadsInactiveTabs ? .on : .off
         unloadDelayPopUp?.selectItem(at: TabUnloadDelay.allCases.firstIndex(of: settings.tabUnloadDelay) ?? 0)
         Self.setRow(unloadDelayRow, enabled: settings.unloadsInactiveTabs)
+        themePopUp?.selectItem(at: ChromeTheme.allCases.firstIndex(of: Settings.theme) ?? 0)
         appearancePopUp?.selectItem(at: Appearance.allCases.firstIndex(of: Settings.appearance) ?? 0)
         accentPopUp?.selectItem(at: AccentTheme.allCases.firstIndex(of: Settings.accentTheme) ?? 0)
+        showAccentState()
         remoteDebuggingButton?.state = Settings.remoteDebuggingEnabled ? .on : .off
         searchPopUp?.selectItem(at: SearchEngine.allCases.firstIndex(of: settings.searchEngine) ?? 0)
         showTemplateState()
@@ -636,6 +651,21 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
     @objc private func unloadDelayChanged(_ sender: NSPopUpButton) {
         guard let delay = (sender.selectedItem?.representedObject as? String).flatMap(TabUnloadDelay.init) else { return }
         settings.tabUnloadDelay = delay
+    }
+
+    @objc private func themeChanged(_ sender: NSPopUpButton) {
+        guard let theme = (sender.selectedItem?.representedObject as? String).flatMap(ChromeTheme.init) else { return }
+        Settings.theme = theme
+        showAccentState()
+    }
+
+    /// Claude and Qoder bring their own accent, so the accent is Tiller's only.
+    private func showAccentState() {
+        let own = Settings.theme == .tiller
+        Self.setRow(accentRow, enabled: own)
+        accentNote?.stringValue = own
+            ? "Selections, chat bubbles and busy dots. Pages follow the appearance."
+            : "\(Settings.theme.displayName) has its own accent. Pages follow the appearance."
     }
 
     @objc private func appearanceChanged(_ sender: NSPopUpButton) {
