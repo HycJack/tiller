@@ -103,6 +103,13 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     /// run_task calls under way, by goal, which is how the window's reports
     /// of a run find them.
     private var jevRows: [String: ToolRowView] = [:]
+    /// Output lines of running commands not yet drawn, by call id. A noisy
+    /// command prints far more often than a row is worth redrawing.
+    private var pendingProgress: [String: String] = [:]
+    private static let progressInterval = 0.2
+    /// The reasoning under way: when it started and its text so far.
+    private var reasoningStarted: Date?
+    private var reasoningText = ""
     private let quickLook = QuickLookItems()
     /// Brings the newest message back into view after scrolling up.
     private let scrollDownButton = ScrollDownButton()
@@ -1004,17 +1011,58 @@ final class AgentChatView: NSView, NSTextViewDelegate {
             turnText = (view, date)
             records.append(.text(text, date: date))
             saveRecords()
+            // The agent may go on to a step, which it can take a while to write.
+            showWaiting()
         case .toolUse(let id, let name, let input):
             let detail = ToolRowView.detail(input)
             let full = ToolRowView.full(input, detail: detail)
-            let row = ToolRowView(name: name, detail: detail, full: full)
-            records.append(.tool(name: name, detail: detail, isError: nil, summary: "", full: full))
+            let row: ToolRowView
+            if let (shown, index) = toolRows[id] {
+                // Its row showed as the model started writing it.
+                row = shown
+                row.fill(detail: detail, full: full)
+                records[index] = .tool(name: name, detail: detail, isError: nil, summary: "", full: full)
+            } else {
+                row = ToolRowView(name: name, detail: detail, full: full)
+                records.append(.tool(name: name, detail: detail, isError: nil, summary: "", full: full))
+                toolRows[id] = (row, records.count - 1)
+                transcript.add(row)
+            }
             saveRecords()
-            toolRows[id] = (row, records.count - 1)
             if row.tool == "run_task", let goal = input["goal"] as? String {
                 jevRows[goal.trimmingCharacters(in: .whitespacesAndNewlines)] = row
             }
-            transcript.add(row)
+        case .toolProgress(let id, let line):
+            guard toolRows[id] != nil else { break }
+            if pendingProgress.isEmpty {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.progressInterval) { [weak self] in
+                    MainActor.assumeIsolated { self?.showPendingProgress() }
+                }
+            }
+            pendingProgress[id] = line
+            return
+        case .reasoningStarted:
+            reasoningStarted = Date()
+            reasoningText = ""
+            transcript.activity = ("Thinking", nil)
+        case .reasoningDelta(let delta):
+            reasoningText += delta
+            transcript.activity = ("Thinking", Self.latestReasoningLine(reasoningText))
+            return
+        case .reasoning(let text):
+            let started = reasoningStarted ?? transcript.waitStarted
+            reasoningStarted = nil
+            reasoningText = ""
+            transcript.activity = nil
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { break }
+            let seconds = started.map { Date().timeIntervalSince($0) }
+            records.append(.reasoning(trimmed, seconds: seconds))
+            saveRecords()
+            transcript.add(ToolRowView(reasoning: trimmed, seconds: seconds))
+            showWaiting()
+        case .activity(let text):
+            transcript.activity = text.map { ($0, nil) }
         case .toolResult(let id, let isError, let summary):
             guard let (row, index) = toolRows.removeValue(forKey: id) else { break }
             jevRows = jevRows.filter { $0.value !== row }
@@ -1023,10 +1071,12 @@ final class AgentChatView: NSView, NSTextViewDelegate {
                 records[index] = .tool(name: name, detail: detail, isError: isError, summary: summary, full: full)
                 saveRecords()
             }
+            pendingProgress[id] = nil
             // The agent is deciding what to do with the result.
-            if toolRows.isEmpty, isBusy { transcript.showThinking() }
+            showWaiting()
         case .retrying:
             setStatus("Retrying…", busy: true)
+            transcript.activity = ("Retrying", nil)
         case .error(let message):
             addError(message)
         case .notice(let message):
@@ -1147,10 +1197,41 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     }
 
     /// Calls still running when the agent ended get a mark of their own.
+    /// What it was busy with ended too.
     private func finishToolRows() {
         for (row, _) in toolRows.values { row.finish(isError: nil, summary: "") }
         toolRows.removeAll()
         jevRows.removeAll()
+        pendingProgress.removeAll()
+        reasoningStarted = nil
+        reasoningText = ""
+        transcript.activity = nil
+    }
+
+    /// The Thinking row, while the agent works on with no call running.
+    private func showWaiting() {
+        if toolRows.isEmpty, isBusy { transcript.showThinking() }
+    }
+
+    private func showPendingProgress() {
+        let follow = transcript.isNearBottom(of: scrollView)
+        for (id, line) in pendingProgress {
+            toolRows[id]?.row.showProgress(line, isOutput: true)
+        }
+        pendingProgress.removeAll()
+        if follow { scrollToBottom() }
+    }
+
+    /// The newest heading of a Codex summary, or the newest line of other
+    /// reasoning, for the Thinking row while it streams.
+    private static func latestReasoningLine(_ text: String) -> String? {
+        let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if let heading = lines.last(where: { $0.hasPrefix("**") && $0.hasSuffix("**") && $0.count > 4 }) {
+            return String(heading.dropFirst(2).dropLast(2))
+        }
+        guard let last = lines.last else { return nil }
+        // Streaming, the line's end may be a few words in.
+        return last.count > 120 ? "…" + String(last.suffix(120)) : last
     }
 
     /// Claude Code and Qoder CLI may name the session in their own files.
@@ -1291,6 +1372,8 @@ final class AgentChatView: NSView, NSTextViewDelegate {
             row = AgentMarkdown.label(text)
         case .tool(let name, let detail, let isError, let summary, let full):
             row = ToolRowView(name: name, detail: detail, full: full, finished: (isError, summary))
+        case .reasoning(let text, let seconds):
+            row = ToolRowView(reasoning: text, seconds: seconds)
         case .note(let text):
             row = NoteView(text: text)
         case .error(let text):

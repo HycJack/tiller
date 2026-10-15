@@ -45,6 +45,8 @@ enum AgentRecord: Codable, Equatable, Sendable {
     /// call's input past what `detail` keeps, nil when there is no more or
     /// in transcripts saved before calls kept it.
     case tool(name: String, detail: String, isError: Bool?, summary: String, full: String? = nil)
+    /// What the model reasoned, or Codex's summary of it, and for how long.
+    case reasoning(String, seconds: Double?)
     case note(String)
     case error(String)
 }

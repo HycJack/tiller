@@ -12,6 +12,15 @@ beta shows what `## Unreleased` holds at the time.
   saved choices are listed in the new Settings > Sites pane. Tabs that
   are recording show a red dot on their icon, and when macOS hasn't let
   Tiller use a device the card says so and opens System Settings.
+- The agent panel says what the agent is doing while it works. The
+  waiting row names the step when it's known, such as thinking, running
+  hooks or compacting the conversation, counts the seconds of a long
+  wait, and now also shows after the agent's text while it writes its
+  next step. Claude Code's and Qoder CLI's file edits and other calls
+  show as soon as the model starts writing them, running calls count
+  their time, and a Codex command shows its latest line of output.
+  Reasoning stays in the transcript as a "Thought for 12s" step with
+  its summary, which a click opens.
 
 ## 0.3.0
 
