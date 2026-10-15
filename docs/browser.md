@@ -64,6 +64,14 @@ Script popup windows (`window.open` with a size, as sign-in flows use) open as n
 
 While the mouse is over a link, its address shows in a small plate at the bottom left of the page. A page that asks for the whole screen, as a video player does, takes the window to full screen with the sidebar and the agent panel out of the way, and gives them back when it is done; leaving full screen with the green button or Escape ends the page's fullscreen too.
 
+## Camera and microphone
+
+When a page asks for the camera or microphone, as a video call does, a card at the top left of the page names the site and what it wants. **Allow Once** lets it record until the page is left, **Always Allow** lets it from now on, **Block** refuses it from now on, and the close button refuses it this once. A frame embedded from another site is asked about under its own name. A site that asks again with a choice already saved gets its answer without the card: refused if any device it wants is blocked, allowed if every one is allowed. A request from a tab in the background waits until you bring that tab to the front; leaving or reloading the page drops it.
+
+macOS also has to let Tiller use each device, and asks the first time a site is allowed one. If it refuses, the card says so and **Open System Settings** goes to Privacy & Security, where Tiller can be turned on; then reload the page.
+
+A tab recording from the camera or microphone has a red dot on its icon, and its tooltip says which. Saved choices are listed in Settings > Sites, where each one can be changed or removed. Screen sharing isn't supported yet: pages that ask for it are refused.
+
 ## Find and zoom
 
 | Shortcut | Action |

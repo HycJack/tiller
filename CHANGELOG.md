@@ -7,6 +7,12 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+- Pages can use the camera and microphone. A site asking for them gets a
+  card at the top of the page with Block, Allow Once and Always Allow;
+  saved choices are listed in the new Settings > Sites pane. Tabs that
+  are recording show a red dot on their icon, and when macOS hasn't let
+  Tiller use a device the card says so and opens System Settings.
+
 ## 0.3.0
 
 - The agent's message field is redesigned: the text spans the field's

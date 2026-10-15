@@ -4,7 +4,7 @@ Tiller's settings, the switches it passes to Chromium, and where it stores data.
 
 ## Settings
 
-Tiller > Settings… (Cmd+,) opens the Settings of the front window's profile. It has nine panes: General, Passwords, Extensions (see [Extensions](browser.md#extensions)), Agent, Providers (see [Custom providers](agent.md#custom-providers)), Jev (see [run_task](tools.md#run_task)), Skills (see [Skills](agent.md#tillers-skill-library)), Scheduled (see [Scheduled prompts](agent.md#scheduled-prompts)) and Profiles (see [Profiles](browser.md#profiles)). Changes are saved as you make them, and apply to that profile only, except the default browser, which macOS keeps for the app, and the appearance, accent color, agent shortcut, updates, extensions and remote debugging, which every profile shares.
+Tiller > Settings… (Cmd+,) opens the Settings of the front window's profile. It has ten panes: General, Passwords, Sites (see [Camera and microphone](browser.md#camera-and-microphone)), Extensions (see [Extensions](browser.md#extensions)), Agent, Providers (see [Custom providers](agent.md#custom-providers)), Jev (see [run_task](tools.md#run_task)), Skills (see [Skills](agent.md#tillers-skill-library)), Scheduled (see [Scheduled prompts](agent.md#scheduled-prompts)) and Profiles (see [Profiles](browser.md#profiles)). Changes are saved as you make them, and apply to that profile only, except the default browser, which macOS keeps for the app, and the appearance, accent color, agent shortcut, updates, extensions and remote debugging, which every profile shares.
 
 | Pane | Setting | Default | Takes effect |
 |---|---|---|---|
@@ -27,6 +27,7 @@ Tiller > Settings… (Cmd+,) opens the Settings of the front window's profile. I
 | Agent | Command: pick a CLI, then the file to run it from | empty, meaning look it up | next new chat |
 | Agent | Model: pick a CLI, then its model, thinking effort, context window and fast mode (see [Model and effort](agent.md#model-and-effort)) | the CLI's own | next new chat |
 | Agent | Extra instructions, added after Tiller's system prompt | empty | next new chat |
+| Sites | Each site's camera and microphone choice: Ask, Allow or Block, or the site removed | none | the site's next request |
 | Skills | Each skill in the library: on or off, added from a folder, archive or Git, or removed | none | a chat's next agent start |
 | Scheduled | Each scheduled prompt: on or off, its name, agent, tools, rule and prompt, added, edited, run now or removed | none | right away |
 

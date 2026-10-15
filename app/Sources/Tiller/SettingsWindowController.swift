@@ -1,8 +1,8 @@
 import AppKit
 import UniformTypeIdentifiers
 
-/// A profile's Settings window (Cmd+,), with General, Passwords, Extensions,
-/// Agent, Providers, Jev, Skills, Scheduled and Profiles panes. Every change is
+/// A profile's Settings window (Cmd+,), with General, Passwords, Sites,
+/// Extensions, Agent, Providers, Jev, Skills, Scheduled and Profiles panes. Every change is
 /// saved as it is made, in the profile, except the appearance, accent color,
 /// agent shortcut, updates, remote debugging and extensions, which every
 /// profile shares.
@@ -19,6 +19,7 @@ final class SettingsWindowController: NSWindowController {
         let panes: [(NSViewController, String)] = [
             (GeneralSettingsPane(profile: profile), "gearshape"),
             (PasswordsSettingsPane(profile: profile), "key"),
+            (SitePermissionsSettingsPane(profile: profile), "hand.raised"),
             (ExtensionsSettingsPane(profile: profile), "puzzlepiece.extension"),
             (AgentSettingsPane(profile: profile), "sparkles"),
             (ProvidersSettingsPane(profile: profile), "server.rack"),
@@ -926,6 +927,184 @@ final class PasswordsSettingsPane: NSViewController, NSTableViewDataSource, NSTa
                     SettingsPane.show(error.localizedDescription, in: self.note, warning: true)
                 }
             }
+        }
+    }
+}
+
+// MARK: Sites
+
+/// The camera and microphone choices saved for each site, with a pop-up to
+/// change each one and buttons to forget sites. A site with no choice for a
+/// device asks again the next time it wants it.
+final class SitePermissionsSettingsPane: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSMenuItemValidation {
+    private let table = SettingsTableView()
+    private let removeButton = NSButton(title: "Remove", target: nil, action: nil)
+    private let removeAllButton = NSButton(title: "Remove All…", target: nil, action: nil)
+    private let note = SettingsPane.wrappingNote(width: SettingsPane.tableWidth)
+    private var placeholder: NSTextField?
+    private let profile: ProfileContext
+    private var permissions: SitePermissions { profile.settings.sitePermissions }
+    /// The sites with a saved choice, sorted by name.
+    private var origins: [String] = []
+
+    /// A pop-up's choices, "Ask" forgetting the saved one.
+    private static let choices: [(title: String, permission: SitePermission?)] = [
+        ("Ask", nil), ("Allow", .allow), ("Block", .block),
+    ]
+
+    init(profile: ProfileContext) {
+        self.profile = profile
+        super.init(nibName: nil, bundle: nil)
+        title = "Sites"
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        for (id, title, width) in [("site", "Website", 340.0), ("camera", "Camera", 120.0), ("microphone", "Microphone", 120.0)] {
+            let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
+            column.title = title
+            column.width = width
+            table.addTableColumn(column)
+        }
+        table.allowsMultipleSelection = true
+        table.style = .inset
+        table.rowHeight = 24
+        table.dataSource = self
+        table.delegate = self
+        let scroll = NSScrollView()
+        scroll.documentView = table
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        let (tableBox, placeholder) = SettingsPane.withPlaceholder(scroll, "No Saved Choices")
+        self.placeholder = placeholder
+
+        removeButton.target = self
+        removeButton.action = #selector(remove(_:))
+        removeAllButton.target = self
+        removeAllButton.action = #selector(removeAll(_:))
+        let buttons = NSStackView(views: [removeButton, NSView(), removeAllButton])
+        buttons.spacing = 8
+
+        let stack = NSStackView(views: [tableBox, buttons, note])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        let view = NSView()
+        view.addSubview(stack)
+        NSLayoutConstraint.activate([
+            scroll.widthAnchor.constraint(equalToConstant: SettingsPane.tableWidth),
+            scroll.heightAnchor.constraint(equalToConstant: SettingsPane.tableHeight),
+            buttons.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+            stack.topAnchor.constraint(equalTo: view.topAnchor, constant: 20),
+            stack.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -20),
+            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+        ])
+        self.view = view
+        view.layoutSubtreeIfNeeded()
+        preferredContentSize = view.fittingSize
+        NotificationCenter.default.addObserver(self, selector: #selector(reload(_:)), name: .sitePermissionsDidChange, object: nil)
+        reload(nil)
+    }
+
+    /// Keeps the same sites selected across a reload.
+    @objc private func reload(_ notification: Notification?) {
+        let selected = Set(selectedOrigins)
+        origins = permissions.all.keys.sorted {
+            SitePermissions.displayName($0).localizedStandardCompare(SitePermissions.displayName($1)) == .orderedAscending
+        }
+        table.reloadData()
+        table.selectRowIndexes(IndexSet(origins.indices.filter { selected.contains(origins[$0]) }), byExtendingSelection: false)
+        updateControls()
+    }
+
+    private func updateControls() {
+        removeButton.isEnabled = !table.selectedRowIndexes.isEmpty
+        removeAllButton.isEnabled = !origins.isEmpty
+        placeholder?.isHidden = !origins.isEmpty
+        SettingsPane.show(
+            "When a site asks for your camera or microphone, Always Allow and Block are saved here. "
+                + "Removing a site makes it ask again.",
+            in: note
+        )
+    }
+
+    private var selectedOrigins: [String] {
+        table.selectedRowIndexes.compactMap { origins.indices.contains($0) ? origins[$0] : nil }
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { origins.count }
+
+    func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
+        guard origins.indices.contains(row), let id = column?.identifier.rawValue else { return nil }
+        let origin = origins[row]
+        guard let device = MediaDevice(rawValue: id) else {
+            let cell = SettingsPane.textCell(tableView, SitePermissions.displayName(origin))
+            cell.textField?.toolTip = origin
+            return cell
+        }
+        let popUp = NSPopUpButton()
+        popUp.controlSize = .small
+        popUp.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        popUp.isBordered = false
+        popUp.addItems(withTitles: Self.choices.map(\.title))
+        let saved = permissions.permissions(for: origin)[device]
+        popUp.selectItem(at: Self.choices.firstIndex { $0.permission == saved } ?? 0)
+        popUp.tag = row
+        popUp.identifier = NSUserInterfaceItemIdentifier(device.rawValue)
+        popUp.target = self
+        popUp.action = #selector(choose(_:))
+        popUp.setAccessibilityLabel("\(SitePermissions.displayName(origin)) \(device.rawValue.capitalized)")
+        return popUp
+    }
+
+    func tableView(_ tableView: NSTableView, typeSelectStringFor column: NSTableColumn?, row: Int) -> String? {
+        guard origins.indices.contains(row), column?.identifier.rawValue == "site" else { return nil }
+        return SitePermissions.displayName(origins[row])
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        updateControls()
+    }
+
+    @objc private func choose(_ sender: NSPopUpButton) {
+        guard origins.indices.contains(sender.tag), let id = sender.identifier?.rawValue,
+            let device = MediaDevice(rawValue: id), Self.choices.indices.contains(sender.indexOfSelectedItem)
+        else { return }
+        permissions.set(Self.choices[sender.indexOfSelectedItem].permission, for: [device], origin: origins[sender.tag])
+    }
+
+    /// Edit > Delete and the Delete key forget the selected sites.
+    @objc func delete(_ sender: Any?) {
+        guard removeButton.isEnabled else { return NSSound.beep() }
+        remove(sender)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action == #selector(delete(_:)) ? removeButton.isEnabled : true
+    }
+
+    /// Nothing is lost that the site can't ask for again, so this doesn't ask.
+    @objc private func remove(_ sender: Any?) {
+        let picked = Set(selectedOrigins)
+        guard !picked.isEmpty else { return }
+        table.deselectAll(nil)
+        permissions.remove(picked)
+    }
+
+    @objc private func removeAll(_ sender: Any?) {
+        guard let window = view.window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Forget the camera and microphone choices of all sites?"
+        alert.informativeText = "Each of the \(origins.count) sites asks again the next time it wants them."
+        alert.addButton(withTitle: "Remove All")
+        alert.buttons[0].hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            MainActor.assumeIsolated { self?.permissions.removeAll() }
         }
     }
 }

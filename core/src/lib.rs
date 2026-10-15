@@ -363,6 +363,13 @@ pub extern "C" fn tiller_browser_unload(id: c_int) {
     browser::unload(id);
 }
 
+/// Answers the camera and microphone request `id` from `media_permission`:
+/// grants everything it asked for, or denies it.
+#[unsafe(no_mangle)]
+pub extern "C" fn tiller_media_permission_answer(id: u64, allow: bool) {
+    browser::answer_media_request(id, allow);
+}
+
 /// Stops all callbacks for this browser and takes it away from its tab's id.
 /// Call before freeing the callback context.
 #[unsafe(no_mangle)]
