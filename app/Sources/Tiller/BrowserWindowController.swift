@@ -189,6 +189,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         splitView.autosaveName = splitName
         window.contentView = splitView
         window.toolbarStyle = .unified
+        applyTheme()
 
         if !window.setFrameUsingName(Self.autosaveName("TillerBrowserWindow", profile: profile)) {
             // A profile's first window steps down from another one's.
@@ -228,6 +229,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(passwordsChanged(_:)), name: .passwordsDidChange, object: profile.passwords)
         center.addObserver(self, selector: #selector(tabLayoutChanged(_:)), name: .tabLayoutDidChange, object: nil)
+        center.addObserver(self, selector: #selector(themeChanged(_:)), name: .themeDidChange, object: nil)
         center.addObserver(self, selector: #selector(downloadsChanged(_:)), name: .downloadsDidChange, object: nil)
         center.addObserver(self, selector: #selector(downloadStarted(_:)), name: .downloadDidStart, object: nil)
         watchForUnloading()
@@ -1426,6 +1428,24 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         popover.show(relativeTo: downloadsButton.bounds, of: downloadsButton, preferredEdge: .maxY)
     }
 
+    // MARK: Theme
+
+    @objc private func themeChanged(_ notification: Notification) {
+        applyTheme()
+    }
+
+    /// Under Claude or Qoder the window takes the theme's chrome, and the
+    /// titlebar lets it show, rather than the system's material.
+    private func applyTheme() {
+        guard let window else { return }
+        let themed = Settings.theme != .tiller
+        window.titlebarAppearsTransparent = themed
+        window.backgroundColor = themed ? Theme.chrome : NSColor.windowBackgroundColor
+        // The agent button's "on" plate, which AppKit draws in the system accent.
+        agentButton.bezelColor = themed ? Theme.accentFill : nil
+        splitView.needsDisplay = true
+    }
+
     // MARK: Tab layout
 
     @objc private func tabLayoutChanged(_ notification: Notification) {
@@ -2134,7 +2154,7 @@ final class StatusBubbleView: NSView {
         alphaValue = 0
         isHidden = true
         label.font = .systemFont(ofSize: Theme.FontSize.secondary)
-        label.textColor = .secondaryLabelColor
+        label.textColor = Theme.secondaryText
         label.lineBreakMode = .byTruncatingMiddle
         label.maximumNumberOfLines = 1
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -2157,7 +2177,7 @@ final class StatusBubbleView: NSView {
         layer.cornerRadius = Theme.Radius.row
         layer.cornerCurve = .continuous
         layer.maskedCorners = [.layerMaxXMaxYCorner]
-        layer.backgroundColor = NSColor.windowBackgroundColor.dynamic(alpha: 0.96).layerColor
+        layer.backgroundColor = Theme.background.dynamic(alpha: 0.96).layerColor
         layer.borderWidth = Theme.hairlineWidth
         layer.borderColor = Theme.hairline.layerColor
     }

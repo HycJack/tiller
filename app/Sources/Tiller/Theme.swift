@@ -2,10 +2,42 @@ import AppKit
 
 /// The values the chrome shares, so a hover, a corner or a caption reads the
 /// same in the tab strip, the start page, the popovers and the agent panel.
-/// Colors stay semantic system colors with an alpha on top, so they follow
-/// light and dark mode on their own. The accent is the one chosen in
-/// Settings, which `accentColor` reads each time it is drawn.
+/// Under Tiller's own theme, colors stay semantic system colors with an
+/// alpha on top, so they follow light and dark mode on their own, and the
+/// accent is the one chosen in Settings. Under Claude or Qoder they come from
+/// that theme's `Palette`. Either way they are read each time they are drawn.
 enum Theme {
+    // MARK: Colors
+
+    /// The window, and the sidebar, toolbar and agent panel on it.
+    nonisolated static let chrome = themed(.windowBackgroundColor) { $0.chrome }
+    /// The start page, and a page that hasn't painted yet.
+    nonisolated static let background = themed(.windowBackgroundColor) { $0.background }
+    /// The face of a field over the chrome, such as the message field.
+    nonisolated static let surface = themed(.controlBackgroundColor) { $0.surface }
+    nonisolated static let text = themed(.labelColor) { $0.text }
+    nonisolated static let secondaryText = themed(.secondaryLabelColor) { $0.muted }
+    nonisolated static let tertiaryText = themed(.tertiaryLabelColor) { $0.faint }
+    nonisolated static let danger = themed(.systemRed) { $0.danger }
+    nonisolated static let warning = themed(.systemOrange) { $0.warning }
+    nonisolated static let success = themed(.systemGreen) { $0.success }
+    /// A solid accent to fill a button, as Send, deeper than `accentColor`
+    /// where white on that would be hard to read.
+    nonisolated static let accentFill = themed(accentColor(alpha: 1)) { $0.fill }
+    /// The glyph or text on `accentFill`.
+    nonisolated static let accentFillText = themed(.white) { $0.fillText }
+
+    /// `system` under Tiller's theme, else `pick` of the palette, for the
+    /// appearance it is drawn in.
+    private nonisolated static func themed(_ system: NSColor, _ pick: @escaping @Sendable (Palette) -> NSColor) -> NSColor {
+        NSColor(name: nil) { appearance in
+            if let palette = Palette.current(for: appearance) { return pick(palette) }
+            var color = system
+            appearance.performAsCurrentDrawingAppearance { color = system.usingColorSpace(.sRGB) ?? system }
+            return color
+        }
+    }
+
     // MARK: Fills
 
     /// Alphas of `labelColor` for a surface's resting, hovered, pressed and
@@ -31,8 +63,8 @@ enum Theme {
         static let outline: CGFloat = 0.45
     }
 
-    /// `labelColor` at `alpha`, resolved whenever it is drawn.
-    static func fill(_ alpha: CGFloat) -> NSColor { NSColor.labelColor.dynamic(alpha: alpha) }
+    /// `text` at `alpha`, resolved whenever it is drawn.
+    static func fill(_ alpha: CGFloat) -> NSColor { text.dynamic(alpha: alpha) }
 
     /// The fill for a row or tile in the given state, or clear at rest.
     static func fill(hovered: Bool, pressed: Bool = false, selected: Bool = false) -> NSColor {
@@ -42,9 +74,9 @@ enum Theme {
         return .clear
     }
 
-    /// The accent chosen in Settings, resolved whenever it is drawn, so a
-    /// color set once still follows a change. Nonisolated, so it can resolve
-    /// wherever AppKit asks for it.
+    /// The accent chosen in Settings, or the theme's own, resolved whenever
+    /// it is drawn, so a color set once still follows a change. Nonisolated,
+    /// so it can resolve wherever AppKit asks for it.
     nonisolated static let accentColor = accentColor(alpha: 1)
 
     /// The accent at `alpha`.
@@ -53,20 +85,31 @@ enum Theme {
     private nonisolated static func accentColor(alpha: CGFloat) -> NSColor {
         NSColor(name: nil) { appearance in
             var color = NSColor.controlAccentColor
-            appearance.performAsCurrentDrawingAppearance {
-                color = Settings.accentTheme.color.usingColorSpace(.sRGB) ?? color
+            if let palette = Palette.current(for: appearance) {
+                color = palette.accent
+            } else {
+                appearance.performAsCurrentDrawingAppearance {
+                    color = Settings.accentTheme.color.usingColorSpace(.sRGB) ?? color
+                }
             }
             return alpha < 1 ? color.withAlphaComponent(alpha) : color
         }
     }
 
-    /// The solid fill of a highlighted row: the system's, or the chosen accent.
+    /// The solid fill of a highlighted row: the system's, the chosen accent
+    /// or the theme's button fill.
     static var selectionColor: NSColor {
-        Settings.accentTheme == .system ? .selectedContentBackgroundColor : accentColor
+        if Settings.theme != .tiller { return accentFill }
+        return Settings.accentTheme == .system ? .selectedContentBackgroundColor : accentColor
+    }
+
+    /// Text on `selectionColor`.
+    static var selectionText: NSColor {
+        Settings.theme == .tiller ? .alternateSelectedControlTextColor : accentFillText
     }
 
     /// A one-point line between surfaces.
-    static var hairline: NSColor { .separatorColor }
+    nonisolated static let hairline = themed(.separatorColor) { $0.border }
 
     // MARK: Shape
 
@@ -238,6 +281,91 @@ enum Theme {
     /// faint fill alone would not show.
     static func selectionOutline(selected: Bool) -> NSColor {
         increaseContrast && selected ? fill(Accent.outline) : .clear
+    }
+}
+
+/// The colors of a theme other than Tiller's own, for a light or a dark
+/// window. The values are Mayoi's Claude and Qoder themes.
+struct Palette: Sendable {
+    /// The window, and the sidebar, toolbar and agent panel on it.
+    let chrome: NSColor
+    /// The start page.
+    let background: NSColor
+    let border: NSColor
+    let text: NSColor
+    let muted: NSColor
+    let faint: NSColor
+    /// For marks on the chrome: selections, dots, links.
+    let accent: NSColor
+    /// The accent as a button's background, under `fillText`.
+    let fill: NSColor
+    let fillText: NSColor
+    let danger: NSColor
+    let warning: NSColor
+    let success: NSColor
+    /// The face of a field.
+    let surface: NSColor
+
+    /// The palette of the theme chosen in Settings, for `appearance`, or nil
+    /// under Tiller's own theme.
+    nonisolated static func current(for appearance: NSAppearance) -> Palette? {
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return of(Settings.theme, dark: dark)
+    }
+
+    nonisolated static func of(_ theme: ChromeTheme, dark: Bool) -> Palette? {
+        switch theme {
+        case .tiller: nil
+        case .claude: dark ? claudeDark : claudeLight
+        case .qoder: dark ? qoderDark : qoderLight
+        }
+    }
+
+    /// Anthropic's ivory and near-black, with a deeper orange for marks on a
+    /// light ground.
+    static let claudeLight = Palette(
+        chrome: hex(0xf0eee6), background: hex(0xfaf9f5), border: hex(0xe3dfd3),
+        text: hex(0x141413), muted: hex(0x6b675f), faint: hex(0x938d82),
+        accent: hex(0xc96442), fill: hex(0xb8573a), fillText: hex(0xffffff),
+        danger: hex(0xbf4d3a), warning: hex(0xb5791f), success: hex(0x5e8a3a),
+        surface: hex(0xffffff)
+    )
+
+    /// Anthropic's warm near-black and cloud, with Claude's orange. White on
+    /// that orange reads at 3:1, so buttons take a deeper one, at 4.6:1.
+    static let claudeDark = Palette(
+        chrome: hex(0x191918), background: hex(0x1f1e1d), border: hex(0x2e2c2a),
+        text: hex(0xe8e6dc), muted: hex(0xa39e93), faint: hex(0x75716a),
+        accent: hex(0xd97757), fill: hex(0xb8573a), fillText: hex(0xffffff),
+        danger: hex(0xe8705f), warning: hex(0xe3b25f), success: hex(0x7ba05b),
+        surface: hex(0x262523)
+    )
+
+    /// Qoder's Forest Light: white, grey with a hint of green, and the forest
+    /// green of its buttons.
+    static let qoderLight = Palette(
+        chrome: hex(0xf2f4f2), background: hex(0xffffff), border: hex(0xe3e6e3),
+        text: hex(0x141414), muted: hex(0x636261), faint: hex(0x838280),
+        accent: hex(0x4b6f5a), fill: hex(0x4b6f5a), fillText: hex(0xfdfdfd),
+        danger: hex(0xc9363e), warning: hex(0xb77a0a), success: hex(0x579b6e),
+        surface: hex(0xffffff)
+    )
+
+    /// Qoder's Forest Dark: greys with a little green, a light green for
+    /// marks, and a deeper one for buttons, with a near-black label at 5.9:1.
+    static let qoderDark = Palette(
+        chrome: hex(0x242624), background: hex(0x191b1a), border: hex(0x363c37),
+        text: hex(0xd9dcd9), muted: hex(0x949d96), faint: hex(0x6b736d),
+        accent: hex(0x8ee5a1), fill: hex(0x4d9c61), fillText: hex(0x080807),
+        danger: hex(0xff6b70), warning: hex(0xfaad14), success: hex(0x73cd94),
+        surface: hex(0x222523)
+    )
+
+    private static func hex(_ value: UInt32) -> NSColor {
+        NSColor(
+            srgbRed: CGFloat((value >> 16) & 0xff) / 255, green: CGFloat((value >> 8) & 0xff) / 255,
+            blue: CGFloat(value & 0xff) / 255, alpha: 1
+        )
     }
 }
 

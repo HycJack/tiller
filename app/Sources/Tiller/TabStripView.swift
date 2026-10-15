@@ -419,7 +419,7 @@ final class TabItemView: NSView {
         closeButton.image = Self.closeImage
         closeButton.isBordered = false
         closeButton.bezelStyle = .accessoryBarAction
-        closeButton.contentTintColor = .secondaryLabelColor
+        closeButton.contentTintColor = Theme.secondaryText
         closeButton.target = self
         closeButton.action = #selector(closeClicked)
         closeButton.toolTip = "Close Tab"
@@ -477,7 +477,7 @@ final class TabItemView: NSView {
             setAccessibilityLabel(title + capturing)
         }
         icon.image = tab.favicon ?? Self.globe
-        icon.contentTintColor = .secondaryLabelColor
+        icon.contentTintColor = Theme.secondaryText
         updateAppearance()
     }
 
@@ -492,7 +492,7 @@ final class TabItemView: NSView {
         // alone marks the selected one. A tab whose page isn't loaded,
         // restored at launch or unloaded to save memory, is dimmed for that.
         let dimmed = !tab.isStarted && !isSelected
-        titleLabel.textColor = dimmed ? .secondaryLabelColor : .labelColor
+        titleLabel.textColor = dimmed ? Theme.secondaryText : Theme.text
         // A compact tab only offers to close when it is the selected one, so a
         // pass of the mouse along a crowded row can't hit a close button.
         let showsClose = closesOnTrailing ? isHovered || isSelected : isHovered && (!isCompact || isSelected)
@@ -500,7 +500,7 @@ final class TabItemView: NSView {
         titleToClose.isActive = closesOnTrailing && showsClose
         let coversIcon = showsClose && !closesOnTrailing
         Self.show(icon, !(coversIcon || tab.isLoading), alpha: dimmed ? 0.5 : 1)
-        captureDot.layer?.backgroundColor = NSColor.systemRed.layerColor
+        captureDot.layer?.backgroundColor = Theme.danger.layerColor
         // Over the icon, the spinner or the close button, whichever is there.
         captureDot.isHidden = tab.capturing.isEmpty
         if tab.isLoading && !coversIcon {
@@ -646,9 +646,9 @@ final class NewTabRowView: NSView {
         setAccessibilityLabel("New Tab")
 
         icon.image = Theme.symbol("plus", size: Theme.Symbol.row, label: "New Tab")
-        icon.contentTintColor = .secondaryLabelColor
+        icon.contentTintColor = Theme.secondaryText
         titleLabel.font = .systemFont(ofSize: Theme.FontSize.secondary)
-        titleLabel.textColor = .secondaryLabelColor
+        titleLabel.textColor = Theme.secondaryText
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 

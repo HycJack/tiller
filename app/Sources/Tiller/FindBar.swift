@@ -24,7 +24,7 @@ final class FindBar: NSView, NSTextFieldDelegate {
         super.init(frame: frame)
 
         let icon = NSImageView(image: Theme.symbol("magnifyingglass", size: Theme.Symbol.inline) ?? NSImage())
-        icon.contentTintColor = .secondaryLabelColor
+        icon.contentTintColor = Theme.secondaryText
 
         field.placeholderString = "Find in page"
         field.isBordered = false
@@ -41,7 +41,7 @@ final class FindBar: NSView, NSTextFieldDelegate {
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         countLabel.font = .monospacedDigitSystemFont(ofSize: Theme.FontSize.caption, weight: .regular)
-        countLabel.textColor = .secondaryLabelColor
+        countLabel.textColor = Theme.secondaryText
         countLabel.alignment = .right
         countLabel.setContentHuggingPriority(.required, for: .horizontal)
         countLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -70,7 +70,7 @@ final class FindBar: NSView, NSTextFieldDelegate {
         glass.cornerRadius = Theme.Capsule.radius
         // A faint wash of the window color, so the capsule still shows on a
         // white page, where clear glass all but disappears.
-        glass.tintColor = NSColor.windowBackgroundColor.dynamic(alpha: 0.5)
+        glass.tintColor = Theme.background.dynamic(alpha: 0.5)
         glass.translatesAutoresizingMaskIntoConstraints = false
         addSubview(glass)
         NSLayoutConstraint.activate([
@@ -102,10 +102,10 @@ final class FindBar: NSView, NSTextFieldDelegate {
         case let (count, active)? where count > 0:
             // Chromium counts before it picks a match.
             countLabel.stringValue = active > 0 ? "\(active) of \(count)" : count == 1 ? "1 match" : "\(count) matches"
-            countLabel.textColor = .secondaryLabelColor
+            countLabel.textColor = Theme.secondaryText
         case _? where hasText:
             countLabel.stringValue = "No matches"
-            countLabel.textColor = .systemRed
+            countLabel.textColor = Theme.danger
         default:
             countLabel.stringValue = ""
         }

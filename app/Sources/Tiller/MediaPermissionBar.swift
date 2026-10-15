@@ -39,11 +39,11 @@ final class MediaPermissionBar: NSView {
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
 
-        icon.contentTintColor = .systemRed
+        icon.contentTintColor = Theme.danger
         icon.setContentHuggingPriority(.required, for: .horizontal)
 
         label.font = .systemFont(ofSize: Theme.FontSize.body)
-        label.textColor = .labelColor
+        label.textColor = Theme.text
         label.isSelectable = false
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -84,7 +84,7 @@ final class MediaPermissionBar: NSView {
         glass.contentView = column
         glass.cornerRadius = Theme.Radius.plate
         // As the find bar's: still visible over a white page.
-        glass.tintColor = NSColor.windowBackgroundColor.dynamic(alpha: 0.85)
+        glass.tintColor = Theme.background.dynamic(alpha: 0.85)
         glass.translatesAutoresizingMaskIntoConstraints = false
         addSubview(glass)
         NSLayoutConstraint.activate([
@@ -112,16 +112,16 @@ final class MediaPermissionBar: NSView {
         case .request(let request):
             devices = request.devices
             text = NSMutableAttributedString(
-                string: SitePermissions.displayName(request.origin), attributes: [.font: bold, .foregroundColor: NSColor.labelColor])
+                string: SitePermissions.displayName(request.origin), attributes: [.font: bold, .foregroundColor: Theme.text])
             text.append(NSAttributedString(
                 string: " wants to use your \(MediaDevice.names(request.devices)).",
-                attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
+                attributes: [.font: font, .foregroundColor: Theme.text]))
         case .refused(let refused):
             devices = refused
             text = NSMutableAttributedString(
                 string: "macOS isn't letting Tiller use your \(MediaDevice.names(refused)). "
                     + "Turn Tiller on in Privacy & Security, then reload the page.",
-                attributes: [.font: font, .foregroundColor: NSColor.labelColor])
+                attributes: [.font: font, .foregroundColor: Theme.text])
         }
         label.attributedStringValue = text
         setAccessibilityLabel(text.string)

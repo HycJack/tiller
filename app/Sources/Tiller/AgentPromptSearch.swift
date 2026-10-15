@@ -37,7 +37,7 @@ final class PromptSearch: NSVisualEffectView, NSSearchFieldDelegate {
         field.setAccessibilityLabel("Search Sent Messages")
 
         emptyLabel.font = .systemFont(ofSize: Theme.FontSize.secondary)
-        emptyLabel.textColor = .secondaryLabelColor
+        emptyLabel.textColor = Theme.secondaryText
         emptyLabel.isHidden = true
 
         stack.orientation = .vertical
@@ -227,7 +227,7 @@ private final class PromptSearchRow: NSView {
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let more = NSTextField(labelWithString: lines.count > 1 ? "+\(lines.count - 1) lines" : "")
         more.font = .systemFont(ofSize: Theme.FontSize.caption)
-        more.textColor = .secondaryLabelColor
+        more.textColor = Theme.secondaryText
         more.isHidden = lines.count < 2
         let stack = NSStackView(views: [label, NSView(), more])
         stack.spacing = 6

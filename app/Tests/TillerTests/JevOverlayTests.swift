@@ -50,10 +50,10 @@ struct JevOverlayTests {
 
     @Test func taskRowsMarkHowARunEnded() {
         #expect(ToolRowView.taskEnding("Done in 2.4 s, 5 steps")?.description == "Done")
-        #expect(ToolRowView.taskEnding("Blocked after 1 step: x")?.color == .systemOrange)
-        #expect(ToolRowView.taskEnding("Out of steps: took 30 actions")?.color == .systemOrange)
+        #expect(ToolRowView.taskEnding("Blocked after 1 step: x")?.color == Theme.warning)
+        #expect(ToolRowView.taskEnding("Out of steps: took 30 actions")?.color == Theme.warning)
         #expect(ToolRowView.taskEnding("Stopped after 2 steps: the user stopped it in Tiller")?.description == "Stopped")
-        #expect(ToolRowView.taskEnding("Error after 0 steps: HTTP 401")?.color == .systemRed)
+        #expect(ToolRowView.taskEnding("Error after 0 steps: HTTP 401")?.color == Theme.danger)
         #expect(ToolRowView.taskEnding("{\"status\": \"done\"}") == nil)
     }
 }

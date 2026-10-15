@@ -607,7 +607,7 @@ private final class PaintCoverView: NSView {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        layer?.backgroundColor = NSColor.windowBackgroundColor.layerColor
+        layer?.backgroundColor = Theme.background.layerColor
     }
 
     // Clicks wait for the page rather than landing on what can't be seen.

@@ -1452,7 +1452,7 @@ final class ScrollDownButton: NSButton {
         imagePosition = .imageOnly
         isBordered = false
         bezelStyle = .accessoryBarAction
-        contentTintColor = .labelColor
+        contentTintColor = Theme.text
         toolTip = "Scroll to Newest"
         setAccessibilityLabel("Scroll to Newest")
         alphaValue = 0
@@ -1518,7 +1518,7 @@ final class ScrollDownButton: NSButton {
         // fills are mixed into it rather than laid on top. Mixed here, where
         // the view's appearance is current.
         let fill = isHighlighted ? Theme.Fill.pressed : isHovered ? Theme.Fill.hover : 0
-        let plate = NSColor.windowBackgroundColor.blended(withFraction: fill, of: .labelColor) ?? .windowBackgroundColor
+        let plate = Theme.chrome.blended(withFraction: fill, of: Theme.text) ?? Theme.chrome
         withEasing(Theme.Duration.quick) { layer.backgroundColor = plate.layerColor }
         layer.borderWidth = Theme.hairlineWidth
         layer.borderColor = Theme.hairline.layerColor

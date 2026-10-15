@@ -50,21 +50,21 @@ final class AddressBarView: NSView {
         // Only Return navigates. Leaving the field must not load what it shows.
         field.cell?.sendsActionOnEndEditing = false
 
-        statusIcon.contentTintColor = .secondaryLabelColor
+        statusIcon.contentTintColor = Theme.secondaryText
         statusIcon.imageScaling = .scaleNone
 
         keyButton.bezelStyle = .accessoryBarAction
         keyButton.isBordered = false
         keyButton.imagePosition = .imageOnly
         keyButton.image = Theme.symbol("key.fill", size: Theme.Symbol.inline, label: "Fill Password")
-        keyButton.contentTintColor = .secondaryLabelColor
+        keyButton.contentTintColor = Theme.secondaryText
         keyButton.toolTip = "Fill Saved Password"
         keyButton.isHidden = true
 
         zoomButton.bezelStyle = .accessoryBarAction
         zoomButton.isBordered = false
         zoomButton.font = .monospacedDigitSystemFont(ofSize: Theme.FontSize.caption, weight: .medium)
-        zoomButton.contentTintColor = .secondaryLabelColor
+        zoomButton.contentTintColor = Theme.secondaryText
         zoomButton.toolTip = "Actual Size"
         zoomButton.isHidden = true
 
@@ -345,10 +345,10 @@ final class AddressField: NSTextField {
         paragraph.lineBreakMode = .byTruncatingTail
         let text = NSMutableAttributedString(string: shown, attributes: [
             .font: font ?? .systemFont(ofSize: Theme.FontSize.body),
-            .foregroundColor: NSColor.secondaryLabelColor,
+            .foregroundColor: Theme.secondaryText,
             .paragraphStyle: paragraph,
         ])
-        text.addAttribute(.foregroundColor, value: NSColor.labelColor, range: Self.siteRange(in: shown))
+        text.addAttribute(.foregroundColor, value: Theme.text, range: Self.siteRange(in: shown))
         attributedStringValue = text
         toolTip = shown.isEmpty ? nil : shown
     }

@@ -172,7 +172,7 @@ final class DownloadsButton: NSButton {
             let ring = rect.insetBy(dx: 1.5, dy: 1.5)
             let track = NSBezierPath(ovalIn: ring)
             track.lineWidth = 2
-            NSColor.labelColor.withAlphaComponent(0.2).setStroke()
+            Theme.text.withAlphaComponent(0.2).setStroke()
             track.stroke()
             if let progress {
                 let done = NSBezierPath()
@@ -190,7 +190,7 @@ final class DownloadsButton: NSButton {
             if let arrow = NSImage(systemSymbolName: "arrow.down", accessibilityDescription: nil)?
                 .withSymbolConfiguration(
                     NSImage.SymbolConfiguration(pointSize: 8, weight: .bold)
-                        .applying(NSImage.SymbolConfiguration(paletteColors: [.labelColor])))
+                        .applying(NSImage.SymbolConfiguration(paletteColors: [Theme.text])))
             {
                 let size = arrow.size
                 let origin = NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2)
@@ -242,7 +242,7 @@ final class DownloadsController: NSViewController {
         scroll.automaticallyAdjustsContentInsets = false
 
         emptyLabel.font = .systemFont(ofSize: Theme.FontSize.secondary)
-        emptyLabel.textColor = .secondaryLabelColor
+        emptyLabel.textColor = Theme.secondaryText
         emptyLabel.alignment = .center
 
         let view = NSView()
@@ -346,7 +346,7 @@ private final class DownloadRowView: NSView {
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         detail.font = .systemFont(ofSize: Theme.FontSize.caption)
-        detail.textColor = .secondaryLabelColor
+        detail.textColor = Theme.secondaryText
         detail.lineBreakMode = .byTruncatingTail
         detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -360,7 +360,7 @@ private final class DownloadRowView: NSView {
         // Round, as its glyphs are circles.
         action.plateRadius = Self.actionSize / 2
         action.imagePosition = .imageOnly
-        action.contentTintColor = .secondaryLabelColor
+        action.contentTintColor = Theme.secondaryText
         action.target = self
 
         let text = NSStackView(views: [name, detail, progress])
@@ -415,7 +415,7 @@ private final class DownloadRowView: NSView {
         if name.stringValue != download.name { name.stringValue = download.name }
         let text = detailText()
         if detail.stringValue != text { detail.stringValue = text }
-        detail.textColor = download.state == .failed ? .systemRed : .secondaryLabelColor
+        detail.textColor = download.state == .failed ? Theme.danger : Theme.secondaryText
         let indeterminate = download.fraction == nil
         if progress.isIndeterminate != indeterminate {
             progress.isIndeterminate = indeterminate

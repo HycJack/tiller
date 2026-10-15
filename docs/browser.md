@@ -160,7 +160,7 @@ Tiller can be the Mac's default browser, for web links and HTML files opened fro
 
 ## Appearance
 
-Settings > General picks light or dark and an accent color for each profile. Light or dark applies to pages too, which see it as `prefers-color-scheme`, so a site with a dark theme follows Tiller rather than macOS. The accent tints Tiller's own selections, chat bubbles, busy dots and the start page. Buttons, focus rings and text selection are drawn by macOS and keep the system accent. Both default to matching the system. See [Settings](settings-and-data.md#settings).
+Settings > General picks a theme, light or dark, and an accent color. The theme is Tiller's own, which uses the system's colors, or Claude or Qoder, which give the window, sidebar, toolbar, agent panel and start page their own colors and accent, light or dark as the appearance is; with them the accent color setting is off. Light or dark applies to pages too, which see it as `prefers-color-scheme`, so a site with a dark theme follows Tiller rather than macOS. The accent tints Tiller's own selections, chat bubbles, busy dots and the start page. Buttons, focus rings and text selection are drawn by macOS and keep the system accent. Both default to matching the system. See [Settings](settings-and-data.md#settings).
 
 ## Accessibility
 
@@ -170,7 +170,7 @@ The chrome follows the system's accessibility settings. VoiceOver reads tabs, th
 
 A profile has its own cookies and site data, history, open tabs, saved passwords, settings and agent chats. One Tiller runs every open profile, each in a window of its own, under one Dock icon.
 
-- Extensions, the appearance, the accent color and the agent panel's shortcut are shared by every profile.
+- Extensions, the theme, the appearance, the accent color and the agent panel's shortcut are shared by every profile.
 - The Profiles menu lists them, with a check on the front window's profile and a dash on the other open ones. Choosing one brings its window forward, or opens it. New Profile… asks for a name and opens it.
 - Settings > Profiles lists them too, with buttons to open, add, rename and delete. An open profile can't be deleted. Deleting moves the profile's folders to the Trash and removes its settings and password key.
 - Settings (Cmd+,) shows the front window's profile. With more than one profile, each window shows its profile's name at the right of the toolbar, where clicking it opens the Profiles menu, and in the window title, which the Dock's and the Window menu's window lists show.
