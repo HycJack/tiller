@@ -164,8 +164,21 @@ enum AgentEvent {
     case textDelta(String)
     /// A complete text block. Replaces the streamed one if there was one.
     case text(String)
+    /// A tool call. Claude Code's and Qoder CLI's come twice: with no input
+    /// as soon as the model starts writing it, then whole.
     case toolUse(id: String, name: String, input: [String: Any])
+    /// The newest line a running call printed (Codex's shell only).
+    case toolProgress(id: String, line: String)
     case toolResult(id: String, isError: Bool, summary: String)
+    /// The model started reasoning (Claude Code, Qoder CLI and Codex).
+    case reasoningStarted
+    /// More of the reasoning's text, or of Codex's summary of it.
+    case reasoningDelta(String)
+    /// The reasoning ended, with all of its text, which may be empty.
+    case reasoning(String)
+    /// What the agent is busy with between messages and calls, such as
+    /// running hooks; nil once that ended.
+    case activity(String?)
     case retrying
     /// Something went wrong that doesn't end the turn.
     case error(String)
@@ -228,6 +241,10 @@ final class AgentSession {
     /// The input of a message sent before the thread started.
     private var queuedInput: [[String: Any]]?
     private var reportedToolFailure = false
+    /// Hooks running, by id: Codex's run before and after every call.
+    private var runningHooks: Set<String> = []
+    /// The end of each running command's output, by item id.
+    private var commandOutput: [String: String] = [:]
     /// thread/resume attempts refused because the last process on the thread
     /// hasn't exited yet.
     private var resumeRetries = 0
@@ -461,6 +478,8 @@ final class AgentSession {
         turnID = nil
         queuedInput = nil
         reportedToolFailure = false
+        runningHooks.removeAll()
+        commandOutput.removeAll()
         resumeRetries = 0
         agyNeedsPrompt = false
         agyTextStep = nil
@@ -540,16 +559,32 @@ final class AgentSession {
                     }
                 }
             case "api_retry": onEvent?(.retrying)
+            case "status":
+                onEvent?(.activity(message["status"] as? String == "compacting" ? "Compacting the conversation" : nil))
             default: break
             }
         case "stream_event":
             guard let event = message["event"] as? [String: Any] else { return }
             switch event["type"] as? String {
             case "content_block_start":
-                if (event["content_block"] as? [String: Any])?["type"] as? String == "text" { onEvent?(.textStarted) }
+                let block = event["content_block"] as? [String: Any] ?? [:]
+                switch block["type"] as? String {
+                case "text": onEvent?(.textStarted)
+                case "thinking": onEvent?(.reasoningStarted)
+                // The row shows while the model writes the call's input,
+                // which for a whole file takes a while. grok's calls come
+                // wrapped, so their names are known only once complete.
+                case "tool_use" where kind != .grok:
+                    onEvent?(.toolUse(id: block["id"] as? String ?? "", name: block["name"] as? String ?? "tool", input: [:]))
+                default: break
+                }
             case "content_block_delta":
                 let delta = event["delta"] as? [String: Any]
-                if delta?["type"] as? String == "text_delta", let text = delta?["text"] as? String { onEvent?(.textDelta(text)) }
+                switch delta?["type"] as? String {
+                case "text_delta": if let text = delta?["text"] as? String { onEvent?(.textDelta(text)) }
+                case "thinking_delta": if let text = delta?["thinking"] as? String { onEvent?(.reasoningDelta(text)) }
+                default: break
+                }
             default: break
             }
         case "assistant":
@@ -558,6 +593,8 @@ final class AgentSession {
                 switch block["type"] as? String {
                 case "text":
                     if let text = block["text"] as? String, !text.isEmpty { onEvent?(.text(text)) }
+                case "thinking":
+                    onEvent?(.reasoning(block["thinking"] as? String ?? ""))
                 case "tool_use":
                     var name = block["name"] as? String ?? "tool"
                     var input = block["input"] as? [String: Any] ?? [:]
@@ -751,6 +788,21 @@ final class AgentSession {
             if let name = params["threadName"] as? String, !name.isEmpty { onEvent?(.renamed(name)) }
         case "item/agentMessage/delta":
             if let delta = params["delta"] as? String { onEvent?(.textDelta(delta)) }
+        case "item/reasoning/summaryTextDelta":
+            if let delta = params["delta"] as? String { onEvent?(.reasoningDelta(delta)) }
+        case "item/reasoning/summaryPartAdded":
+            // Each part is a paragraph of its own.
+            if (params["summaryIndex"] as? Int ?? 0) > 0 { onEvent?(.reasoningDelta("\n\n")) }
+        case "item/commandExecution/outputDelta":
+            guard let id = params["itemId"] as? String, let delta = params["delta"] as? String else { return }
+            let output = String((commandOutput[id, default: ""] + delta).suffix(2000))
+            commandOutput[id] = output
+            if let line = Self.lastLine(of: output) { onEvent?(.toolProgress(id: id, line: line)) }
+        case "hook/started", "hook/completed":
+            guard let run = (params["run"] as? [String: Any])?["id"] as? String else { return }
+            let wasRunning = !runningHooks.isEmpty
+            if method == "hook/started" { runningHooks.insert(run) } else { runningHooks.remove(run) }
+            if runningHooks.isEmpty == wasRunning { onEvent?(.activity(runningHooks.isEmpty ? nil : "Running hooks")) }
         case "error":
             // A final error also arrives with turn/completed.
             if params["willRetry"] as? Bool == true { onEvent?(.retrying) }
@@ -788,11 +840,20 @@ final class AgentSession {
                 let content = (item["result"] as? [String: Any])?["content"]
                 onEvent?(.toolResult(id: id, isError: status == "failed", summary: error ?? Self.summary(of: content)))
             }
+        case "reasoning":
+            if !completed {
+                onEvent?(.reasoningStarted)
+            } else {
+                onEvent?(.reasoning((item["summary"] as? [String] ?? []).joined(separator: "\n\n")))
+            }
+        case "contextCompaction":
+            onEvent?(.activity(completed ? nil : "Compacting the conversation"))
         case "commandExecution":
             // Codex's shell, confined to its sandbox.
             if !completed {
                 onEvent?(.toolUse(id: id, name: "shell", input: ["command": item["command"] as? String ?? ""]))
             } else {
+                commandOutput[id] = nil
                 onEvent?(.toolResult(id: id, isError: status != "completed", summary: Self.summary(of: item["aggregatedOutput"])))
             }
         case "fileChange":
@@ -957,6 +1018,19 @@ final class AgentSession {
         }
         let cut = text.prefix(161)
         return cut.count > 160 ? String(cut.prefix(160)) + "…" : String(cut)
+    }
+
+    /// The last line of a command's output that isn't empty, without its
+    /// terminal colors. A carriage return starts the line over, as a
+    /// progress bar redraws itself.
+    static func lastLine(of output: String) -> String? {
+        for line in output.split(whereSeparator: \.isNewline).reversed() {
+            let shown = line.split(separator: "\r").last ?? ""
+            let plain = shown.replacingOccurrences(of: "\u{1B}\\[[0-9;?]*[ -/]*[@-~]", with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+            if !plain.isEmpty { return plain.count > 200 ? String(plain.prefix(200)) + "…" : plain }
+        }
+        return nil
     }
 
     /// The first line of `text` that isn't empty.
@@ -1381,6 +1455,9 @@ enum AgentEnvironment {
             ],
         ]
         if let effort = options.effort { config["model_reasoning_effort"] = effort }
+        // Without it, OpenAI's reasoning comes with no summary for the
+        // transcript. A provider's server may not take it.
+        if provider == nil { config["model_reasoning_summary"] = "auto" }
         var params: [String: Any] = [
             "cwd": cwd.path,
             "sandbox": tools.contains(.shell) ? "danger-full-access"

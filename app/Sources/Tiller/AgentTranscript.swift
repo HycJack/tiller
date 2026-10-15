@@ -41,9 +41,10 @@ final class TranscriptView: NSView {
     private var openGroup: ToolGroupView?
 
     /// Tool calls that follow one another go into one group; any other row
-    /// ends the group.
+    /// ends the group. Whatever the agent was busy with has ended.
     func add(_ row: NSView) {
         hideThinking()
+        activity = nil
         if let call = row as? ToolRowView {
             if let openGroup {
                 openGroup.add(call)
@@ -80,10 +81,25 @@ final class TranscriptView: NSView {
     func showThinking() {
         guard thinking == nil else { return }
         let row = ThinkingRowView()
+        row.activity = activity
         thinking = row
         stack.addArrangedSubview(row)
+        row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         needsLayout = true
     }
+
+    /// What the agent is busy with, which the Thinking row says in place of
+    /// its phrases, with a line of detail under it; nil when unknown.
+    var activity: (text: String, detail: String?)? {
+        didSet { thinking?.activity = activity }
+    }
+
+    /// When the Thinking row showing came.
+    var waitStarted: Date? { thinking?.started }
+
+    #if DEBUG
+    var thinkingForTesting: ThinkingRowView? { thinking }
+    #endif
 
     func hideThinking() {
         thinking?.removeFromSuperview()
@@ -427,9 +443,11 @@ private final class ThumbnailRemoveButton: NSButton {
 
 /// One tool call: a spinner, then a check or a cross, beside the tool and
 /// what it acted on. A running call shows its arguments on a few lines under
-/// its name; a finished one keeps a single line. A failed call adds the
-/// first line of its error. The whole input shows on hover. With `disclosure`, the row is the clickable header of a
-/// `ToolGroupView`, with a chevron for its state.
+/// its name, and after a few seconds how long it has run; a finished one
+/// keeps a single line. A failed call adds the first line of its error. The
+/// whole input shows on hover. With `disclosure`, the row is the clickable
+/// header of a `ToolGroupView`, with a chevron for its state. A reasoning
+/// row is a step too, which a click opens to its text.
 final class ToolRowView: NSView, TranscriptRow {
     enum Outcome { case running, done, failed, unfinished }
 
@@ -459,8 +477,14 @@ final class ToolRowView: NSView, TranscriptRow {
     private let chevron: NSImageView?
     private var detail: String
     private var heading: NSAttributedString
-    /// What a running run_task is doing now, under its goal.
-    private var progress: String?
+    /// What a running run_task is doing now, under its goal, or the last
+    /// line a running command printed, set in code type.
+    private var progress: (text: String, isOutput: Bool)?
+    /// When the call started, and the timer that shows how long it has run.
+    private let started = Date()
+    private var ticker: Timer?
+    /// A reasoning row's whole text, shown under its heading when open.
+    private var body: String?
 
     /// `detail` is what `detail(_:)` made of the call's input, and `full`
     /// what `full(_:detail:)` did. A `finished` row, as a saved chat's are,
@@ -529,6 +553,91 @@ final class ToolRowView: NSView, TranscriptRow {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// A stretch of reasoning: "Thought for 12s" and its first heading or
+    /// line. When there is more, a click opens the whole text under it.
+    convenience init(reasoning text: String, seconds: Double?) {
+        let title = Self.reasoningTitle(text)
+        let plain = text.replacingOccurrences(of: "**", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let more = plain != title
+        self.init(name: "thinking", detail: title, disclosure: more, finished: (false, ""))
+        let name = seconds.map { "Thought for " + ThinkingRowView.duration(max(1, $0)) } ?? "Thought"
+        heading = Self.heading(name: name, detail: title)
+        icon.image = NSImage(systemSymbolName: "brain", accessibilityDescription: "Reasoning")?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
+        icon.contentTintColor = .tertiaryLabelColor
+        if more {
+            body = plain
+            onToggle = { [weak self] in
+                guard let self else { return }
+                self.isExpanded.toggle()
+                self.showHeading()
+            }
+        } else if !title.isEmpty {
+            toolTip = title
+            label.toolTip = title
+        }
+        setAccessibilityLabel(heading.string)
+        showHeading()
+    }
+
+    /// Codex's summaries start with a bold heading; other reasoning with
+    /// its first line.
+    private static func reasoningTitle(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("**"), let end = trimmed.dropFirst(2).range(of: "**") {
+            return String(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 2)..<end.lowerBound])
+        }
+        let line = trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        return line.count > 80 ? String(line.prefix(80)) + "…" : line
+    }
+
+    #if DEBUG
+    var textForTesting: String { label.stringValue }
+    #endif
+
+    /// Fills in a call whose row showed before its input was complete.
+    func fill(detail: String, full: String?) {
+        guard chevron == nil else { return }
+        self.detail = detail
+        heading = Self.heading(tool: tool, detail: detail)
+        if let tip = full ?? (detail.isEmpty ? nil : detail) {
+            toolTip = tip
+            label.toolTip = tip
+        }
+        showHeading()
+    }
+
+    // How long a call has run counts only while the row is on screen.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateTicker()
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        updateTicker()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        updateTicker()
+    }
+
+    private func updateTicker() {
+        let ticking = outcome == .running && chevron == nil && window != nil && !isHiddenOrHasHiddenAncestor
+        guard ticking != (ticker != nil) else { return }
+        ticker?.invalidate()
+        ticker = nil
+        guard ticking else { return }
+        showHeading()
+        ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, Date().timeIntervalSince(self.started) >= ThinkingRowView.elapsedDelay else { return }
+                self.showHeading()
+            }
+        }
+    }
+
     func fit(width: CGFloat) {
         label.preferredMaxLayoutWidth = width - 39 - (chevron == nil ? 0 : 18)
     }
@@ -546,32 +655,55 @@ final class ToolRowView: NSView, TranscriptRow {
     /// broken anywhere, as a script has few spaces to break at. Otherwise
     /// they follow the name on one line, cut at its end.
     private func showHeading() {
-        let running = outcome == .running && chevron == nil && !detail.isEmpty
-        let text = NSMutableAttributedString(attributedString: running ? Self.heading(tool: tool, detail: detail, separator: "\n") : heading)
+        let running = outcome == .running && chevron == nil
+        let wrapped = running && !detail.isEmpty
+        let text: NSMutableAttributedString
+        if running {
+            let elapsed = Date().timeIntervalSince(started)
+            text = NSMutableAttributedString(attributedString: Self.heading(name: Self.displayName(of: tool), detail: ""))
+            if elapsed >= ThinkingRowView.elapsedDelay {
+                text.append(NSAttributedString(string: "  " + ThinkingRowView.duration(elapsed), attributes: [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
+                    .foregroundColor: NSColor.tertiaryLabelColor,
+                ]))
+            }
+            if wrapped { text.append(Self.heading(name: "", detail: detail, separator: "\n")) }
+        } else {
+            text = NSMutableAttributedString(attributedString: heading)
+        }
         if running, let progress {
-            text.append(Self.subline(progress, color: Theme.accentColor))
+            text.append(Self.subline(progress.text, color: progress.isOutput ? .secondaryLabelColor : Theme.accentColor, code: progress.isOutput))
+        }
+        let open = isExpanded && body != nil
+        if open, let body {
+            text.append(NSAttributedString(string: "\n" + body, attributes: [
+                .font: NSFont.systemFont(ofSize: 11),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]))
         }
         label.attributedStringValue = text
-        label.lineBreakMode = running ? .byCharWrapping : .byTruncatingTail
-        label.maximumNumberOfLines = running ? (progress == nil ? 4 : 5) : 1
+        label.lineBreakMode = open ? .byWordWrapping : wrapped ? .byCharWrapping : .byTruncatingTail
+        label.maximumNumberOfLines = open ? 0 : wrapped ? (progress == nil ? 4 : 5) : running && progress != nil ? 2 : 1
         label.invalidateIntrinsicContentSize()
     }
 
-    /// A line under the heading: a run_task's step, or how it ended.
-    private static func subline(_ text: String, color: NSColor) -> NSAttributedString {
+    /// A line under the heading: a run_task's step, a command's output, or
+    /// how it ended.
+    private static func subline(_ text: String, color: NSColor, code: Bool = false) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
         return NSAttributedString(string: "\n" + text, attributes: [
-            .font: NSFont.systemFont(ofSize: 11),
+            .font: code ? NSFont.monospacedSystemFont(ofSize: 11, weight: .regular) : NSFont.systemFont(ofSize: 11),
             .foregroundColor: color,
             .paragraphStyle: paragraph,
         ])
     }
 
-    /// What a running run_task is doing, from the window's reports of it.
-    func showProgress(_ text: String) {
-        guard outcome == .running, progress != text else { return }
-        progress = text
+    /// What a running run_task is doing, from the window's reports of it,
+    /// or with `isOutput` the last line a running command printed.
+    func showProgress(_ text: String, isOutput: Bool = false) {
+        guard outcome == .running, progress?.text != text else { return }
+        progress = (text, isOutput)
         showHeading()
         setAccessibilityValue(text)
     }
@@ -595,6 +727,8 @@ final class ToolRowView: NSView, TranscriptRow {
     /// A nil `isError` means the call never finished: the agent stopped first.
     func finish(isError: Bool?, summary: String) {
         spinner.stopAnimation(nil)
+        ticker?.invalidate()
+        ticker = nil
         icon.isHidden = false
         isHovered = false
         // Only a failure gets a color: a long run would otherwise be a
@@ -776,12 +910,17 @@ final class ToolRowView: NSView, TranscriptRow {
         case "WebSearch": "Search the web"
         case "TodoWrite": "Plan"
         case "Task": "Subtask"
+        case "thinking": "Thought"
         default: tool
         }
     }
 
     private static func heading(tool: String, detail: String, separator: String = "  ") -> NSAttributedString {
-        let text = NSMutableAttributedString(string: displayName(of: tool), attributes: [
+        heading(name: displayName(of: tool), detail: detail, separator: separator)
+    }
+
+    private static func heading(name: String, detail: String, separator: String = "  ") -> NSAttributedString {
+        let text = NSMutableAttributedString(string: name, attributes: [
             .font: NSFont.systemFont(ofSize: 12, weight: .medium),
             .foregroundColor: NSColor.labelColor,
         ])
@@ -982,18 +1121,33 @@ final class ToolGroupView: NSView, TranscriptRow {
 }
 
 /// What shows between sending a message and the agent's first words or
-/// step: a small bobbing boat and a sailing phrase, where the answer will
-/// start.
+/// step, and between steps: a small bobbing boat and what the agent is busy
+/// with where that's known, a sailing phrase where it isn't. A wait of more
+/// than a few seconds counts up beside it, so a long one reads as work under
+/// way rather than a hang.
 final class ThinkingRowView: NSView {
     private static let phrases = [
         "Setting sail…", "Reading the wind…", "Charting a course…", "Trimming the sails…",
         "Holding the tiller…", "Tacking…", "Scanning the horizon…", "Riding the swell…",
     ]
-    private static let phraseInterval: TimeInterval = 3
+    private static let phraseInterval = 3
+    /// Waits shorter than this show no time, so quick steps don't flicker.
+    static let elapsedDelay: TimeInterval = 3
+
+    let started = Date()
+    /// Replaces the phrases while set, with an optional line under it.
+    var activity: (text: String, detail: String?)? {
+        didSet { update() }
+    }
 
     private let label: NSTextField
+    private let elapsedLabel = NSTextField(labelWithString: "")
+    private let detailLabel = NSTextField(labelWithString: "")
+    private var bottomToBoat: NSLayoutConstraint!
+    private var bottomToDetail: NSLayoutConstraint!
     private var phrase: Int
     private var timer: Timer?
+    private var ticks = 0
 
     init() {
         phrase = Int.random(in: 0..<Self.phrases.count)
@@ -1002,32 +1156,57 @@ final class ThinkingRowView: NSView {
         let boat = BoatView()
         label.font = .systemFont(ofSize: 12)
         label.textColor = .secondaryLabelColor
-        for view in [boat, label] as [NSView] {
+        elapsedLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        elapsedLabel.textColor = .tertiaryLabelColor
+        detailLabel.font = .systemFont(ofSize: 11)
+        detailLabel.textColor = .tertiaryLabelColor
+        detailLabel.isHidden = true
+        for field in [label, detailLabel] {
+            field.lineBreakMode = .byTruncatingTail
+            field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        }
+        for view in [boat, label, elapsedLabel, detailLabel] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
         // The boat and text sit in a tool row's columns, so the boat stays
         // put when the next step's row takes this one's place.
+        bottomToBoat = boat.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2)
+        bottomToDetail = detailLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2)
         NSLayoutConstraint.activate([
             boat.centerXAnchor.constraint(equalTo: leadingAnchor, constant: ToolRowView.iconLeading + ToolRowView.iconWidth / 2),
             boat.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            boat.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            bottomToBoat,
             boat.widthAnchor.constraint(equalToConstant: 16),
             boat.heightAnchor.constraint(equalToConstant: 16),
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: ToolRowView.textLeading),
             label.centerYAnchor.constraint(equalTo: boat.centerYAnchor),
+            elapsedLabel.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 6),
+            elapsedLabel.firstBaselineAnchor.constraint(equalTo: label.firstBaselineAnchor),
+            elapsedLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -9),
+            detailLabel.leadingAnchor.constraint(equalTo: label.leadingAnchor),
+            detailLabel.topAnchor.constraint(equalTo: boat.bottomAnchor, constant: 1),
+            detailLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -9),
         ])
-        // The phrases are decoration; VoiceOver hears one plain word.
+        // The phrases are decoration; VoiceOver hears one plain word, or
+        // what the agent is busy with.
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
         setAccessibilityLabel("Working")
-        label.setAccessibilityElement(false)
+        for field in [label, elapsedLabel, detailLabel] { field.setAccessibilityElement(false) }
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// The phrase changes only while the row is on screen: in a window, and
-    /// not in a hidden chat or panel, which a turn can run on in.
+    #if DEBUG
+    /// The main line, and the detail line under it when shown.
+    var textForTesting: (main: String, detail: String?) {
+        (label.stringValue, detailLabel.isHidden ? nil : detailLabel.stringValue)
+    }
+    #endif
+
+    /// The phrase and time change only while the row is on screen: in a
+    /// window, and not in a hidden chat or panel, which a turn can run on in.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         updateTimer()
@@ -1049,9 +1228,38 @@ final class ThinkingRowView: NSView {
         timer?.invalidate()
         timer = nil
         guard visible else { return }
-        timer = Timer.scheduledTimer(withTimeInterval: Self.phraseInterval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.nextPhrase() }
+        updateElapsed()
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
         }
+    }
+
+    private func tick() {
+        updateElapsed()
+        ticks += 1
+        if activity == nil, ticks % Self.phraseInterval == 0 { nextPhrase() }
+    }
+
+    private func updateElapsed() {
+        let elapsed = Date().timeIntervalSince(started)
+        elapsedLabel.stringValue = elapsed < Self.elapsedDelay ? "" : Self.duration(elapsed)
+    }
+
+    /// "8s", or "2m 05s".
+    static func duration(_ seconds: TimeInterval) -> String {
+        let whole = max(0, Int(seconds))
+        return whole < 60 ? "\(whole)s" : String(format: "%dm %02ds", whole / 60, whole % 60)
+    }
+
+    private func update() {
+        label.stringValue = activity.map { $0.text + "…" } ?? Self.phrases[phrase]
+        label.alphaValue = 1
+        setAccessibilityLabel(activity?.text ?? "Working")
+        let detail = activity?.detail.flatMap { $0.isEmpty ? nil : $0 }
+        detailLabel.stringValue = detail ?? ""
+        detailLabel.isHidden = detail == nil
+        bottomToBoat.isActive = detail == nil
+        bottomToDetail.isActive = detail != nil
     }
 
     private func nextPhrase() {
@@ -1063,7 +1271,8 @@ final class ThinkingRowView: NSView {
             label.animator().alphaValue = 0
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self else { return }
+                // Unless the agent said what it's doing meanwhile.
+                guard let self, self.activity == nil else { return }
                 self.label.stringValue = text
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0.15
