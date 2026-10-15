@@ -46,12 +46,12 @@ cargo run -p export-cef-dir -- --force $HOME/.local/share/cef
 
 The build reads CEF from `$CEF_PATH`, which defaults to `~/.local/share/cef`. Update the download whenever the pinned `cef` version changes.
 
-That download can't play H.264 video or AAC audio, which X, most news sites and most MP4 files use, because the stock CEF builds leave those patent-encumbered codecs out. To play them, put a CEF framework built with `proprietary_codecs=true` in `~/.local/share/cef-codecs`. The build uses the framework there when present, and the headers from `$CEF_PATH` either way. [aiexkwan/aurix-cef](https://github.com/aiexkwan/aurix-cef/releases) publishes such a build for the same Chromium as the pinned CEF, made by a third party and unsigned, so check that it's one you're willing to run:
+That download can't play H.264 video or AAC audio, which X, most news sites and most MP4 files use, because the stock CEF builds leave those patent-encumbered codecs out. To play them, put a CEF framework built with `proprietary_codecs=true` in `~/.local/share/cef-codecs`. The build uses the framework there when present, and the headers from `$CEF_PATH` either way. The [cef-codecs-154.0.26](https://github.com/sorrycc/Tiller/releases/tag/cef-codecs-154.0.26) release has such a build for the same Chromium as the pinned CEF, made by a third party (aiexkwan/aurix-cef, which no longer publishes it) and unsigned, so check that it's one you're willing to run:
 
 ```sh
 brew install zstd
 mkdir -p ~/.local/share/cef-codecs
-curl -L https://github.com/aiexkwan/aurix-cef/releases/download/cef-154.0.26-codecs/cef-154.0.26-macosarm64-slim.tar.zst \
+curl -L https://github.com/sorrycc/Tiller/releases/download/cef-codecs-154.0.26/cef-154.0.26-macosarm64-codecs.tar.zst \
   | tar --use-compress-program=unzstd -x -C ~/.local/share/cef-codecs
 ```
 

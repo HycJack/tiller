@@ -9,11 +9,13 @@ set -euo pipefail
 
 CEF_RS_TAG="cef-v154.2.0+154.0.28"
 CEF_VERSION="154.0.28"
-CODECS_URL="https://github.com/aiexkwan/aurix-cef/releases/download/cef-154.0.26-codecs/cef-154.0.26-macosarm64-slim.tar.zst"
+CODECS_URL="https://github.com/sorrycc/Tiller/releases/download/cef-codecs-154.0.26/cef-154.0.26-macosarm64-codecs.tar.zst"
 CODECS_VERSION="154.0.26"
-# The codecs build is unsigned and made by a third party: this is the archive
-# that was checked. Change both together.
-CODECS_SHA256="b06ad1580f92385d26bf579bf483cc82f361bfd41fa56565515dcceb0f37ebd1"
+# The codecs build is unsigned and made by a third party, aiexkwan/aurix-cef,
+# which no longer publishes it, so a copy lives on this repository's
+# cef-codecs-154.0.26 release: this is the archive that was checked. Change
+# both together. bump.sh checks the URL still works before tagging.
+CODECS_SHA256="ef6dd8cad079bd4b8402134132c699f50575610fa1d553624d17334477e4c3a9"
 FRAMEWORK="Chromium Embedded Framework.framework"
 CEF_PATH="${CEF_PATH:-$HOME/.local/share/cef}"
 CODECS_DIR="$HOME/.local/share/cef-codecs"
@@ -42,7 +44,10 @@ if has_version "$CODECS_DIR" "$CODECS_VERSION"; then
     echo "==> CEF $CODECS_VERSION with codecs already at $CODECS_DIR"
 else
     echo "==> downloading CEF $CODECS_VERSION with codecs to $CODECS_DIR"
-    curl -fsSL -o "$TMP/codecs.tar.zst" "$CODECS_URL"
+    curl -fsSL --retry 3 --retry-all-errors --connect-timeout 30 -o "$TMP/codecs.tar.zst" "$CODECS_URL" || {
+        echo "::error::Couldn't download the codecs build from $CODECS_URL. It's an asset of a release in sorrycc/Tiller; docs/releasing.md says how to replace it." >&2
+        exit 1
+    }
     echo "$CODECS_SHA256  $TMP/codecs.tar.zst" | shasum -a 256 -c - >/dev/null
     # Another version's files would otherwise stay mixed in with these.
     rm -rf "$CODECS_DIR"

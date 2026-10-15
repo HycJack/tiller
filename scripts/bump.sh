@@ -100,6 +100,13 @@ if gh release view "$TAG" >/dev/null 2>&1; then
     echo "Release $TAG exists already." >&2
     exit 1
 fi
+# The Release workflow downloads the codecs build, so a host that has gone
+# away would only show up halfway through it.
+CODECS_URL="$(sed -n 's/^CODECS_URL="\(.*\)"$/\1/p' scripts/fetch-cef.sh)"
+if ! curl -fsSIL --retry 2 --connect-timeout 30 -o /dev/null "$CODECS_URL"; then
+    echo "The codecs build at $CODECS_URL can't be downloaded, so the release would fail. docs/releasing.md says how to replace it." >&2
+    exit 1
+fi
 ADD_SECTION=
 if [[ "$VERSION" != *-* ]] && ! grep -q "^## $VERSION\$" CHANGELOG.md; then
     if ! /usr/bin/python3 - <<'EOF'
