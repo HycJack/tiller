@@ -14,7 +14,7 @@ https://github.com/user-attachments/assets/1960eca0-6cb0-460b-bb6f-b292b739a147
 
 - **Chromium engine, native shell.** Pages render with Chromium through CEF; the window, tabs and menus are AppKit.
 - **Tabs and session restore.** Tabs along the top or in a sidebar, with a context menu; open tabs and recently closed tabs survive restarts and crashes, and the start page brings the closed ones back.
-- **The usual browser things.** Find in page, zoom, print, a link's address under the mouse, pages going full screen, Chromium's developer tools and view source.
+- **The usual browser things.** Find in page, zoom, print, a link's address under the mouse, pages going full screen, Chromium's developer tools and view source, and the camera and microphone for video calls, asked about per site.
 - **Downloads.** Files go to `~/Downloads`, with progress in the toolbar.
 - **Import from Chrome.** Cookies, saved passwords, history, extensions, search engine and homepage.
 - **Chrome extensions.** Add unpacked folders or CRX files, or bring Chrome's over. Content scripts, background workers and popups run; Chrome's tab and window APIs don't see Tiller's tabs.

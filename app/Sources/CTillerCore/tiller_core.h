@@ -46,6 +46,16 @@ typedef struct TillerBrowserCallbacks {
     void *(*popup_tab)(void *ctx, const char *url, bool background, struct TillerBrowserCallbacks *tab, int *size, int *tab_id);
     // The browser behind a popup_tab view exists, with this id. May be NULL.
     void (*created)(void *ctx, int id);
+    // The page, or a frame in it from `origin`, asked for the microphone
+    // (`audio`), the camera (`video`) or both. Answer with
+    // tiller_media_permission_answer(request_id, ...), now or later. NULL
+    // denies every request.
+    void (*media_permission)(void *ctx, uint64_t request_id, const char *origin, bool audio, bool video);
+    // The main frame started loading a page, so requests still waiting were
+    // denied and their answers do nothing. May be NULL.
+    void (*media_requests_dropped)(void *ctx);
+    // The page started or stopped using the microphone or the camera. May be NULL.
+    void (*media_access_changed)(void *ctx, bool audio, bool video);
 } TillerBrowserCallbacks;
 
 // Static version string. Do not free.
@@ -152,10 +162,14 @@ void tiller_cookies_import(int context, const char *cookies_json, void *ctx,
 void tiller_browser_close(int id);
 
 // Unloads a tab's browser to free its memory. Does nothing while its page is
-// in use: using the camera or microphone, playing media, with DevTools or a
+// in use: using the camera or microphone or asking for them, playing media, with DevTools or a
 // popup it opened still open, or asking to stay in beforeunload. Otherwise
 // unload_ready fires.
 void tiller_browser_unload(int id);
+
+// Answers a media_permission request: true grants all it asked for, false
+// denies it.
+void tiller_media_permission_answer(uint64_t request_id, bool allow);
 
 // Stops callbacks for this browser and takes it away from its tab's id. Call
 // before freeing the callback context.

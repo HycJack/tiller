@@ -34,6 +34,9 @@ pub struct Callbacks {
     pub unload_ready: Option<unsafe extern "C" fn(*mut c_void)>,
     pub popup_tab: Option<unsafe extern "C" fn(*mut c_void, *const c_char, bool, *mut Callbacks, *mut i32, *mut i32) -> *mut c_void>,
     pub created: Option<unsafe extern "C" fn(*mut c_void, i32)>,
+    pub media_permission: Option<unsafe extern "C" fn(*mut c_void, u64, *const c_char, bool, bool)>,
+    pub media_requests_dropped: Option<unsafe extern "C" fn(*mut c_void)>,
+    pub media_access_changed: Option<unsafe extern "C" fn(*mut c_void, bool, bool)>,
 }
 
 /// A tab waiting for the browser CEF creates for a page's `window.open`.
@@ -82,6 +85,17 @@ enum CallPurpose {
     Unload,
 }
 
+/// A page's request for the camera or microphone, waiting for the user.
+struct PendingMedia {
+    browser_id: i32,
+    /// What the page asked for, which an allow must grant in full.
+    permissions: u32,
+    callback: MediaAccessCallback,
+}
+
+const MEDIA_AUDIO: u32 = sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DEVICE_AUDIO_CAPTURE as u32;
+const MEDIA_VIDEO: u32 = sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DEVICE_VIDEO_CAPTURE as u32;
+
 /// True while the page plays something audible or shows picture in picture,
 /// which an unload would cut off.
 const MEDIA_PLAYING_JS: &str = "[...document.querySelectorAll('video, audio')].some(m => !m.paused && !m.ended && !m.muted && m.volume > 0) || !!document.pictureInPictureElement";
@@ -112,6 +126,10 @@ thread_local! {
     /// create, taken by `on_after_created`.
     static PENDING_POPUP: RefCell<Option<PendingPopup>> = const { RefCell::new(None) };
     static DEVTOOLS_CALLS: RefCell<HashMap<i32, PendingCall>> = RefCell::new(HashMap::new());
+    /// Camera and microphone requests the app hasn't answered, by the id it
+    /// answers them with.
+    static PENDING_MEDIA: RefCell<HashMap<u64, PendingMedia>> = RefCell::new(HashMap::new());
+    static NEXT_MEDIA_REQUEST: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
 }
 
 /// DevTools message ids, handed out on the socket threads that frame the
@@ -307,13 +325,14 @@ pub fn close(id: i32) {
 }
 
 /// Starts unloading browser `id` to free its memory, keeping its tab. Pages
-/// in use stay: ones with the camera or microphone, DevTools or a sign-in
+/// in use stay: ones with the camera or microphone or asking for them, DevTools or a sign-in
 /// popup open, ones playing media, and ones whose beforeunload would ask to
 /// stay. Otherwise `unload_ready` fires and the Swift side removes the
 /// browser's view.
 pub fn unload(id: i32) {
     let Some(host) = get(id).and_then(|b| b.host()) else { return };
-    let busy = BROWSERS.with_borrow(|map| map.get(&id).is_none_or(|e| e.closing || e.unloading || e.media_access));
+    let busy = BROWSERS.with_borrow(|map| map.get(&id).is_none_or(|e| e.closing || e.unloading || e.media_access))
+        || has_media_request(id);
     if busy || host.has_dev_tools() != 0 || has_popup(id) || !attach_devtools(id, &host) {
         return;
     }
@@ -531,6 +550,76 @@ wrap_client! {
         fn jsdialog_handler(&self) -> Option<JsdialogHandler> {
             Some(TillerJsDialogHandler::new())
         }
+
+        fn permission_handler(&self) -> Option<PermissionHandler> {
+            Some(TillerPermissionHandler::new())
+        }
+    }
+}
+
+wrap_permission_handler! {
+    struct TillerPermissionHandler;
+
+    impl PermissionHandler {
+        /// A page called getUserMedia. The tab asks the user, or answers from
+        /// what they chose before. Without an answer here Alloy denies it,
+        /// which is what screen sharing and pages outside a tab still get.
+        fn on_request_media_access_permission(
+            &self,
+            browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            requesting_origin: Option<&CefString>,
+            requested_permissions: u32,
+            callback: Option<&mut MediaAccessCallback>,
+        ) -> i32 {
+            let devices = MEDIA_AUDIO | MEDIA_VIDEO;
+            if requested_permissions == 0 || requested_permissions & !devices != 0 {
+                return 0;
+            }
+            let (Some(browser), Some(callback)) = (browser, callback) else { return 0 };
+            let browser_id = browser.identifier();
+            let Some(Callbacks { ctx, media_permission: Some(f), .. }) = callbacks_for(Some(browser)) else {
+                return 0;
+            };
+            let id = NEXT_MEDIA_REQUEST.get();
+            NEXT_MEDIA_REQUEST.set(id + 1);
+            PENDING_MEDIA.with_borrow_mut(|map| {
+                map.insert(id, PendingMedia { browser_id, permissions: requested_permissions, callback: callback.clone() })
+            });
+            let origin = to_cstring(requesting_origin);
+            // The app may answer before this returns, which CEF allows.
+            unsafe {
+                f(ctx, id, origin.as_ptr(), requested_permissions & MEDIA_AUDIO != 0, requested_permissions & MEDIA_VIDEO != 0)
+            };
+            1
+        }
+    }
+}
+
+/// Answers camera and microphone request `id`: grants all it asked for, or
+/// denies it. An answer to a request already dropped does nothing.
+pub fn answer_media_request(id: u64, allow: bool) {
+    let Some(pending) = PENDING_MEDIA.with_borrow_mut(|map| map.remove(&id)) else { return };
+    if allow {
+        pending.callback.cont(pending.permissions);
+    } else {
+        pending.callback.cancel();
+    }
+}
+
+fn has_media_request(browser_id: i32) -> bool {
+    PENDING_MEDIA.with_borrow(|map| map.values().any(|p| p.browser_id == browser_id))
+}
+
+/// Denies every request browser `browser_id` still waits on.
+fn drop_media_requests(browser_id: i32) {
+    let dropped: Vec<PendingMedia> = PENDING_MEDIA.with_borrow_mut(|map| {
+        let ids: Vec<u64> = map.iter().filter(|(_, p)| p.browser_id == browser_id).map(|(id, _)| *id).collect();
+        ids.iter().filter_map(|id| map.remove(id)).collect()
+    });
+    // Answered outside the borrow, in case CEF calls back in.
+    for pending in dropped {
+        pending.callback.cancel();
     }
 }
 
@@ -786,14 +875,19 @@ wrap_display_handler! {
         }
 
         /// The page started or stopped using the camera or microphone. A
-        /// call in a background tab mustn't be cut off by an unload.
+        /// call in a background tab mustn't be cut off by an unload, and the
+        /// tab shows that it is recording.
         fn on_media_access_change(&self, browser: Option<&mut Browser>, has_video_access: i32, has_audio_access: i32) {
-            let Some(id) = browser.map(|b| b.identifier()) else { return };
+            let Some(browser) = browser else { return };
+            let id = browser.identifier();
             BROWSERS.with_borrow_mut(|map| {
                 if let Some(entry) = map.get_mut(&id) {
                     entry.media_access = has_video_access != 0 || has_audio_access != 0;
                 }
             });
+            if let Some(cb) = callbacks_for(Some(browser)) && let Some(f) = cb.media_access_changed {
+                unsafe { f(cb.ctx, has_audio_access != 0, has_video_access != 0) };
+            }
         }
 
         fn on_loading_progress_change(&self, browser: Option<&mut Browser>, progress: f64) {
@@ -935,6 +1029,19 @@ wrap_load_handler! {
         fn on_loading_state_change(&self, browser: Option<&mut Browser>, is_loading: i32, can_go_back: i32, can_go_forward: i32) {
             if let Some(cb) = callbacks_for(browser) && let Some(f) = cb.loading_state_changed {
                 unsafe { f(cb.ctx, is_loading != 0, can_go_back != 0, can_go_forward != 0) };
+            }
+        }
+
+        /// A new page started loading: the old one's camera and microphone
+        /// requests go unanswered, so they are denied.
+        fn on_load_start(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType) {
+            if frame.is_none_or(|f| f.is_main() == 0) {
+                return;
+            }
+            let Some(browser) = browser else { return };
+            drop_media_requests(browser.identifier());
+            if let Some(cb) = callbacks_for(Some(browser)) && let Some(f) = cb.media_requests_dropped {
+                unsafe { f(cb.ctx) };
             }
         }
     }
@@ -1096,6 +1203,7 @@ wrap_life_span_handler! {
                 return;
             }
             fail_devtools_calls(id);
+            drop_media_requests(id);
             let (entry, empty) = BROWSERS.with_borrow_mut(|map| (map.remove(&id), map.is_empty()));
             let unloaded = entry.as_ref().is_some_and(|e| e.unloading);
             // Released outside the borrow: dropping the browser and its

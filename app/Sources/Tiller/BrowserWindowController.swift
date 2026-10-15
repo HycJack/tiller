@@ -62,6 +62,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     }()
     /// Whether the find bar is up. It stays in the view while it fades out.
     private var findBarShown = false
+    /// Asks about the selected tab's first camera or microphone request.
+    private lazy var mediaBar: MediaPermissionBar = {
+        let bar = MediaPermissionBar()
+        bar.onAnswer = { [weak self] answer in self?.answerMediaBar(answer) }
+        bar.onOpenSettings = { [weak self] in self?.openMediaSettings() }
+        return bar
+    }()
+    /// Whether the media bar is up. It stays in the view while it fades out.
+    private var mediaBarShown = false
     /// Shown over the selected tab while it is blank.
     private lazy var startPage: StartPageView = {
         let view = StartPageView(profile: profile)
@@ -313,7 +322,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         }
         let changed = tab !== selectedTab
         selectedTab = tab
-        if changed { jevOverlay.selectionChanged() }
+        if changed {
+            jevOverlay.selectionChanged()
+            updateMediaBar()
+        }
         tab.lastActive = Date()
         tab.hostView.isHidden = false
         start(tab)
@@ -457,6 +469,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             // after the others are gone.
             if closingAll && !next.isStarted {
                 tabStrip.update(tabs: tabs, selected: nil)
+                updateMediaBar()
             } else {
                 select(next, resumeSaving: false)
             }
@@ -704,6 +717,130 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     func tab(_ tab: Tab, performKeyEquivalent event: NSEvent) -> Bool {
         performMenuKeyEquivalent(event)
+    }
+
+    // MARK: Camera and microphone
+
+    /// Answers from the site's saved choice, or waits for the user, who sees
+    /// the request on the tab once it is in front.
+    func tab(_ tab: Tab, requestsMedia request: MediaRequest) {
+        switch profile.settings.sitePermissions.decision(for: request.devices, origin: request.origin) {
+        case .block:
+            tab.answerMediaRequest(request, allow: false)
+        case .allow:
+            grantMedia(request, in: tab)
+        case .ask:
+            tab.mediaRequests.append(request)
+            if tab === selectedTab { updateMediaBar() }
+        }
+    }
+
+    func tabDroppedMediaRequests(_ tab: Tab) {
+        if tab === selectedTab { updateMediaBar() }
+    }
+
+    /// Grants `request` once macOS lets Tiller use its devices, asking macOS
+    /// first if it hasn't been asked. When it refuses, the request is denied
+    /// and the tab says how to fix it.
+    private func grantMedia(_ request: MediaRequest, in tab: Tab) {
+        tab.mediaRequests.removeAll { $0.id == request.id }
+        SystemMediaAccess.request(request.devices) { [weak self, weak tab] refused in
+            guard let tab else { return }
+            tab.answerMediaRequest(request, allow: refused.isEmpty)
+            guard !refused.isEmpty else { return }
+            tab.mediaRefused = refused
+            if tab === self?.selectedTab { self?.updateMediaBar() }
+        }
+    }
+
+    private func answerMediaBar(_ answer: MediaPermissionBar.Answer) {
+        // A click on a bar fading out answers nothing.
+        guard mediaBarShown, let tab = selectedTab, let content = mediaBar.content else { return }
+        guard case .request(let request) = content else {
+            tab.mediaRefused = []
+            return updateMediaBar()
+        }
+        guard tab.mediaRequests.contains(request) else { return updateMediaBar() }
+        let permissions = profile.settings.sitePermissions
+        switch answer {
+        case .block:
+            permissions.set(.block, for: request.devices, origin: request.origin)
+            tab.answerMediaRequest(request, allow: false)
+        case .dismiss:
+            tab.answerMediaRequest(request, allow: false)
+        case .allowOnce:
+            grantMedia(request, in: tab)
+        case .allowAlways:
+            permissions.set(.allow, for: request.devices, origin: request.origin)
+            grantMedia(request, in: tab)
+        }
+        // A saved choice answers the site's other requests waiting here too.
+        if answer == .block || answer == .allowAlways {
+            for waiting in tab.mediaRequests where waiting.origin == request.origin {
+                switch permissions.decision(for: waiting.devices, origin: waiting.origin) {
+                case .block: tab.answerMediaRequest(waiting, allow: false)
+                case .allow: grantMedia(waiting, in: tab)
+                case .ask: break
+                }
+            }
+        }
+        updateMediaBar()
+    }
+
+    private func openMediaSettings() {
+        guard let tab = selectedTab else { return }
+        SystemMediaAccess.openSettings(for: tab.mediaRefused)
+        tab.mediaRefused = []
+        updateMediaBar()
+    }
+
+    /// Shows the selected tab's first request, or what macOS refused it, at
+    /// the top left of the page, over everything else there. Hides the bar
+    /// when there is neither.
+    private func updateMediaBar() {
+        let content: MediaPermissionBar.Content? =
+            if let request = selectedTab?.mediaRequests.first {
+                .request(request)
+            } else if let refused = selectedTab?.mediaRefused, !refused.isEmpty {
+                .refused(refused)
+            } else {
+                nil
+            }
+        guard let content else {
+            guard mediaBarShown else { return }
+            mediaBarShown = false
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Theme.reduceMotion ? 0 : Theme.Duration.quick
+                mediaBar.animator().alphaValue = 0
+            } completionHandler: { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, !self.mediaBarShown else { return }
+                    self.mediaBar.removeFromSuperview()
+                }
+            }
+            return
+        }
+        mediaBar.show(content)
+        // Put back on top, as a tab selected since covers it.
+        if contentView.subviews.last !== mediaBar {
+            mediaBar.removeFromSuperview()
+            mediaBar.translatesAutoresizingMaskIntoConstraints = false
+            contentView.addSubview(mediaBar, positioned: .above, relativeTo: nil)
+            NSLayoutConstraint.activate([
+                mediaBar.topAnchor.constraint(equalTo: contentView.topAnchor, constant: Theme.Padding.row),
+                mediaBar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: Theme.Padding.panel),
+                mediaBar.trailingAnchor.constraint(
+                    lessThanOrEqualTo: contentView.trailingAnchor, constant: -Theme.Padding.panel),
+            ])
+        }
+        guard !mediaBarShown else { return }
+        mediaBarShown = true
+        mediaBar.alphaValue = 0
+        withEasing(Theme.Duration.quick) { mediaBar.animator().alphaValue = 1 }
+        NSAccessibility.post(element: mediaBar, notification: .announcementRequested, userInfo: [
+            .announcement: mediaBar.accessibilityLabel() ?? "",
+            .priority: NSAccessibilityPriorityLevel.high.rawValue,
+        ])
     }
 
     /// Menu shortcuts win over the page, except the Edit menu's, so editors in

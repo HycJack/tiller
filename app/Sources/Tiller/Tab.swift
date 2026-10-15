@@ -25,6 +25,12 @@ protocol TabDelegate: AnyObject {
     /// The tab's browser closed to save memory. The tab stays, and loads its
     /// page again when started.
     func tabDidUnload(_ tab: Tab)
+    /// The page asked for the camera or microphone. Answer with
+    /// `answerMediaRequest`, now or later.
+    func tab(_ tab: Tab, requestsMedia request: MediaRequest)
+    /// The page went away with `mediaRequests` and `mediaRefused` still up,
+    /// which are cleared.
+    func tabDroppedMediaRequests(_ tab: Tab)
 }
 
 extension TabDelegate {
@@ -33,6 +39,10 @@ extension TabDelegate {
     func tab(_ tab: Tab, openPopup url: String, background: Bool) -> Tab? { nil }
     func tab(_ tab: Tab, fullscreenChanged fullscreen: Bool) {}
     func tabDidUnload(_ tab: Tab) {}
+    /// Pages outside a browser window's tabs, such as extension popups, get
+    /// no camera or microphone.
+    func tab(_ tab: Tab, requestsMedia request: MediaRequest) { tab.answerMediaRequest(request, allow: false) }
+    func tabDroppedMediaRequests(_ tab: Tab) {}
 }
 
 /// One CEF browser and the view that hosts it, in its profile's request
@@ -82,6 +92,13 @@ final class Tab {
     private(set) var faviconPNG: Data?
     /// How much of the current load has finished, from 0 to 1.
     private(set) var progress: Double = 1
+    /// The devices the page is recording from.
+    private(set) var capturing: Set<MediaDevice> = []
+    /// Camera and microphone requests waiting for the user, oldest first.
+    var mediaRequests: [MediaRequest] = []
+    /// The devices macOS refused the page's last request, which the tab
+    /// offers to fix in System Settings. Empty when it hasn't.
+    var mediaRefused: Set<MediaDevice> = []
 
     /// The URL and title last written to history, so each change is saved once.
     var recordedVisit: (url: String, title: String)?
@@ -240,6 +257,18 @@ final class Tab {
             created: { ctx, id in
                 guard let ctx else { return }
                 Tab.from(ctx).created(id)
+            },
+            media_permission: { ctx, id, origin, audio, video in
+                guard let ctx, let origin else { return }
+                Tab.from(ctx).mediaRequested(id: id, origin: String(cString: origin), audio: audio, video: video)
+            },
+            media_requests_dropped: { ctx in
+                guard let ctx else { return }
+                Tab.from(ctx).mediaRequestsDropped()
+            },
+            media_access_changed: { ctx, audio, video in
+                guard let ctx else { return }
+                Tab.from(ctx).mediaAccessChanged(audio: audio, video: video)
             }
         )
     }
@@ -383,6 +412,13 @@ final class Tab {
         }
     }
 
+    /// Grants `request` everything it asked for, or denies it, and takes it
+    /// off `mediaRequests`.
+    func answerMediaRequest(_ request: MediaRequest, allow: Bool) {
+        mediaRequests.removeAll { $0.id == request.id }
+        tiller_media_permission_answer(request.id, allow)
+    }
+
     /// Stops callbacks. Call before the tab is released.
     func detach() {
         if browserID >= 0 { tiller_browser_detach(browserID) }
@@ -418,6 +454,9 @@ final class Tab {
         paintCover?.removeFromSuperview()
         paintCover = nil
         isLeavingBlank = false
+        capturing = []
+        // The core denied anything still asked when the browser closed.
+        if !mediaRequests.isEmpty || !mediaRefused.isEmpty { mediaRequestsDropped() }
         delegate?.tabDidUnload(self)
         delegate?.tabDidChange(self)
     }
@@ -481,6 +520,37 @@ final class Tab {
 
     nonisolated private func fullscreenChanged(_ fullscreen: Bool) {
         MainActor.assumeIsolated { delegate?.tab(self, fullscreenChanged: fullscreen) }
+    }
+
+    nonisolated private func mediaRequested(id: UInt64, origin: String, audio: Bool, video: Bool) {
+        MainActor.assumeIsolated {
+            var devices: Set<MediaDevice> = []
+            if audio { devices.insert(.microphone) }
+            if video { devices.insert(.camera) }
+            let request = MediaRequest(id: id, origin: SitePermissions.origin(origin), devices: devices)
+            guard let delegate else { return answerMediaRequest(request, allow: false) }
+            delegate.tab(self, requestsMedia: request)
+        }
+    }
+
+    nonisolated private func mediaRequestsDropped() {
+        MainActor.assumeIsolated {
+            guard !mediaRequests.isEmpty || !mediaRefused.isEmpty else { return }
+            mediaRequests = []
+            mediaRefused = []
+            delegate?.tabDroppedMediaRequests(self)
+        }
+    }
+
+    nonisolated private func mediaAccessChanged(audio: Bool, video: Bool) {
+        MainActor.assumeIsolated {
+            var devices: Set<MediaDevice> = []
+            if audio { devices.insert(.microphone) }
+            if video { devices.insert(.camera) }
+            guard devices != capturing else { return }
+            capturing = devices
+            delegate?.tabDidChange(self)
+        }
     }
 
     nonisolated private func faviconChanged(_ png: Data) {

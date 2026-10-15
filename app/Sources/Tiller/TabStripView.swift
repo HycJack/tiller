@@ -371,6 +371,9 @@ final class TabItemView: NSView {
     }
 
     private let icon = FaviconView()
+    /// A red dot on the icon's corner while the page records from the camera
+    /// or microphone.
+    private let captureDot = PassThroughView()
     private let spinner = NSProgressIndicator()
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = HoverButton()
@@ -385,6 +388,7 @@ final class TabItemView: NSView {
     private static let globe = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
     private static let closeImage = Theme.closeImage(size: 9, label: "Close Tab")
     private static let closeSize: CGFloat = 18
+    private static let captureDotSize: CGFloat = 7
 
     init(tab: Tab) {
         self.tab = tab
@@ -422,7 +426,11 @@ final class TabItemView: NSView {
         // A round plate under the mouse, as in Safari.
         closeButton.plateRadius = Self.closeSize / 2
 
-        for view in [icon, spinner, titleLabel, closeButton] as [NSView] {
+        captureDot.wantsLayer = true
+        captureDot.layer?.cornerRadius = Self.captureDotSize / 2
+        captureDot.isHidden = true
+
+        for view in [icon, spinner, titleLabel, closeButton, captureDot] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -440,6 +448,10 @@ final class TabItemView: NSView {
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 16),
             icon.heightAnchor.constraint(equalToConstant: 16),
+            captureDot.centerXAnchor.constraint(equalTo: icon.trailingAnchor, constant: -1),
+            captureDot.centerYAnchor.constraint(equalTo: icon.topAnchor, constant: 1),
+            captureDot.widthAnchor.constraint(equalToConstant: Self.captureDotSize),
+            captureDot.heightAnchor.constraint(equalToConstant: Self.captureDotSize),
             spinner.centerXAnchor.constraint(equalTo: icon.centerXAnchor),
             spinner.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
             closeOverIcon,
@@ -458,10 +470,11 @@ final class TabItemView: NSView {
 
     func refresh() {
         let title = tab.displayTitle
-        if titleLabel.stringValue != title {
+        let capturing = tab.capturing.isEmpty ? "" : " – using your \(MediaDevice.names(tab.capturing))"
+        if titleLabel.stringValue != title || toolTip != title + capturing {
             titleLabel.stringValue = title
-            toolTip = title
-            setAccessibilityLabel(title)
+            toolTip = title + capturing
+            setAccessibilityLabel(title + capturing)
         }
         icon.image = tab.favicon ?? Self.globe
         icon.contentTintColor = .secondaryLabelColor
@@ -487,6 +500,9 @@ final class TabItemView: NSView {
         titleToClose.isActive = closesOnTrailing && showsClose
         let coversIcon = showsClose && !closesOnTrailing
         Self.show(icon, !(coversIcon || tab.isLoading), alpha: dimmed ? 0.5 : 1)
+        captureDot.layer?.backgroundColor = NSColor.systemRed.layerColor
+        // Over the icon, the spinner or the close button, whichever is there.
+        captureDot.isHidden = tab.capturing.isEmpty
         if tab.isLoading && !coversIcon {
             spinner.startAnimation(nil)
         } else {
@@ -697,4 +713,9 @@ final class NewTabRowView: NSView {
     }
 
     override var mouseDownCanMoveWindow: Bool { false }
+}
+
+/// A view that only draws: clicks go to what is under it.
+private final class PassThroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

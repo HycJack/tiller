@@ -301,6 +301,9 @@ struct ProfileSettings: @unchecked Sendable {
         nonmutating set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "searchTemplate") }
     }
 
+    /// The camera and microphone choices saved for each site.
+    var sitePermissions: SitePermissions { SitePermissions(defaults: defaults) }
+
     /// The search URL for `query`. A custom template that isn't valid falls back to Google.
     func searchURL(for query: String) -> String {
         var template = searchEngine.template ?? searchTemplate
