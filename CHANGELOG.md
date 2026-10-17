@@ -7,6 +7,9 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+- On the start page, a recently closed tab with a long address shows its
+  title again; the address is cut short instead of the title.
+
 ## 0.3.2
 
 - Themes: Settings > General > Theme gives Tiller Claude's colors,

@@ -501,12 +501,14 @@ private final class ClosedTabRow: ClickableView {
         let title = NSTextField(labelWithString: tab.title.isEmpty ? HistoryStore.bare(tab.url) : tab.title)
         title.font = .systemFont(ofSize: Theme.FontSize.body)
         title.lineBreakMode = .byTruncatingTail
-        title.setContentCompressionResistancePriority(.defaultLow - 1, for: .horizontal)
+        // A long address truncates before the title does, which would
+        // otherwise shrink away to nothing beside it.
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let address = NSTextField(labelWithString: HistoryStore.bare(tab.url))
         address.font = .systemFont(ofSize: Theme.FontSize.secondary)
         address.textColor = Theme.secondaryText
         address.lineBreakMode = .byTruncatingTail
-        address.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        address.setContentCompressionResistancePriority(.defaultLow - 1, for: .horizontal)
         let stack = NSStackView(views: [icon, title, address])
         stack.spacing = 8
         stack.setCustomSpacing(10, after: icon)
