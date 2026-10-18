@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sets a new version in Cargo.toml and Cargo.lock, commits it as v<version>
-# with a tag of the same name, and after asking pushes main and the tag, which
+# with a tag of the same name, and pushes main and the tag, which
 # makes the Release workflow build and publish it.
 # Usage: scripts/bump.sh <version | keyword>
 #
@@ -153,11 +153,5 @@ git commit --quiet -m "$TAG" "${FILES[@]}"
 git tag "$TAG"
 git --no-pager log -1 --stat --format='%h %s' "$TAG"
 
-read -r -p "Push main and $TAG to origin, which publishes the release? [y/N] " answer || echo
-if [[ "$answer" != [yY]* ]]; then
-    echo "Not pushed. Push later with: git push --atomic origin main $TAG"
-    echo "Or undo with: git tag -d $TAG && git reset --hard HEAD~1"
-    exit 0
-fi
 git push --quiet --atomic origin main "$TAG"
 echo "==> pushed $TAG. The Release workflow: https://github.com/sorrycc/Tiller/actions/workflows/release.yml"
