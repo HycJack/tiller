@@ -1,13 +1,32 @@
 import AppKit
 
-/// History suggestions under the address bar while the user types. Up and
-/// Down move through them, Return opens the highlighted one, Escape closes the
-/// list. When the best match's address starts with what was typed, it is
-/// highlighted from the start, so Return goes there instead of searching.
+/// Suggestions under the address bar, as in Chrome. While the user types,
+/// the first row is what Return does: the best page from history, its
+/// address completed in the field, when one starts with what was typed and
+/// has been typed or visited before, else the text itself, as a search or a
+/// site. Then come the search engine's suggestions, open tabs to switch to
+/// and pages from history. A click in the field, Cmd+L or Down lists a link
+/// on the clipboard and recent pages. Up and Down, or Tab and Shift-Tab,
+/// move through the rows, wrapping round, and put each in the field; Return
+/// opens it; Shift+Delete forgets a page; Escape goes back to what was typed
+/// and then to the page's URL.
 @MainActor
 final class AddressSuggestions: NSObject, NSTextFieldDelegate {
-    /// Opens a suggestion's URL, in the current tab or a new one.
-    var onOpen: ((String, OpenDisposition) -> Void)?
+    /// Opens a suggestion's URL, in the current tab or a new one. `typed` is
+    /// true for an address rather than a search, which counts in history.
+    var onOpen: ((String, OpenDisposition, Bool) -> Void)?
+    /// Selects the open tab a suggestion stands for.
+    var onSwitchTab: ((ObjectIdentifier) -> Void)?
+    /// The window's tabs other than the selected one.
+    var openTabs: (() -> [OpenTab])?
+
+    /// A tab a suggestion can switch to.
+    struct OpenTab {
+        let id: ObjectIdentifier
+        let url: String
+        let title: String
+        let favicon: NSImage?
+    }
 
     private let addressBar: AddressBarView
     private let panel = SuggestionsPanel()
@@ -15,7 +34,6 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
     /// One row per place in the list, built once and filled in again on each
     /// keystroke; the ones not needed are hidden.
     private var pool: [SuggestionRow] = []
-    /// What the rows open: a search for the text, then the history pages.
     private var rows: [Suggestion] = []
     private var highlighted: Int?
     /// Bumped on every keystroke so a slow query can't show stale results.
@@ -26,7 +44,30 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
     /// True while the panel fades out, still visible but on its way.
     private var isFadingOut = false
 
-    private static let limit = 7
+    /// What the user typed, without the completion shown after it.
+    private var typed = ""
+    /// The rest of the completed address, selected after `typed`.
+    private var completion = ""
+    /// Whether the last edit left the caret at the end without deleting,
+    /// the only edit that completes the text: after Delete the field keeps
+    /// what is left.
+    private var completes = false
+    /// Set by a delete command, for the text change that follows it.
+    private var deleting = false
+    /// Whether Up, Down or Tab has put a row in the field since the last
+    /// keystroke, so the rows that arrive later leave it there.
+    private var moved = false
+    /// Whether the list is the one shown before typing, which nothing is
+    /// highlighted in at first, so Return goes to what the field holds.
+    private var isZeroSuggest = false
+    /// The history pages and the engine's suggestions the rows show, kept
+    /// for the next keystroke.
+    private var shownPages: [HistoryPage] = []
+    private var shownSearches: [String] = []
+
+    private static let maxRows = 8
+    private static let maxSearches = 3
+    private static let maxTabs = 2
     private static let rowHeight = Theme.RowHeight.compact
     private static let inset: CGFloat = 6
 
@@ -34,16 +75,39 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
         /// A search for the typed text, or the site it names.
         case input(String)
         case page(HistoryPage)
+        /// A search the engine suggested.
+        case search(String)
+        case openTab(OpenTab)
+        /// A link on the clipboard.
+        case clipboard(String)
 
         func url(settings: ProfileSettings) -> String {
             switch self {
             case .input(let text): AddressInput.url(for: text, settings: settings)
             case .page(let page): page.url
+            case .search(let text): settings.searchURL(for: text)
+            case .openTab(let tab): tab.url
+            case .clipboard(let url): url
             }
+        }
+
+        /// What Up and Down put in the field.
+        var fieldText: String {
+            switch self {
+            case .input(let text), .search(let text): text
+            case .page(let page): HistoryStore.bare(page.url)
+            case .openTab(let tab): HistoryStore.bare(tab.url)
+            case .clipboard(let url): url
+            }
+        }
+
+        var isRemovable: Bool {
+            if case .page = self { true } else { false }
         }
     }
 
     private let profile: ProfileContext
+    private lazy var searchSuggest = SearchSuggest(settings: profile.settings)
 
     init(addressBar: AddressBarView, profile: ProfileContext) {
         self.addressBar = addressBar
@@ -54,11 +118,12 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
         list.alignment = .width
         list.setAccessibilityRole(.list)
         list.setAccessibilityLabel("Suggestions")
-        pool = (0...Self.limit).map { index in
+        pool = (0..<Self.maxRows).map { index in
             let row = SuggestionRow()
             row.heightAnchor.constraint(equalToConstant: Self.rowHeight).isActive = true
             row.onHover = { [weak self] in self?.highlight(index) }
             row.onClick = { [weak self] disposition in self?.open(index, disposition) }
+            row.onRemove = { [weak self] in self?.remove(index) }
             row.isHidden = true
             list.addArrangedSubview(row)
             return row
@@ -91,8 +156,14 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
     /// page that follows.
     func hide(animated: Bool = true) {
         generation += 1
+        searchSuggest.cancel()
         highlighted = nil
         shownPages = []
+        shownSearches = []
+        typed = ""
+        completion = ""
+        moved = false
+        isZeroSuggest = false
         guard panel.isVisible else { return }
         fadeGeneration += 1
         guard animated else { return close() }
@@ -117,23 +188,89 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
         panel.alphaValue = 1
     }
 
+    /// Lists a link on the clipboard and recent pages, before anything is
+    /// typed. Only when the user asked for the field, by a click, Cmd+L or
+    /// Down: a new tab, which takes the field on its own, keeps its start
+    /// page clear.
+    func showOnFocus() {
+        guard addressBar.field.isEditing else { return }
+        generation += 1
+        let generation = generation
+        let current = HistoryStore.bare(addressBar.field.url).lowercased()
+        let link = Self.copiedLink().flatMap { HistoryStore.bare($0).lowercased() == current ? nil : $0 }
+        profile.history.recentWithIcons(limit: Self.maxRows + 1) { [weak self] pages in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.generation == generation, self.addressBar.field.isEditing else { return }
+                    var seen: Set<String> = [current]
+                    if let link { seen.insert(HistoryStore.bare(link).lowercased()) }
+                    let recent = pages.filter { seen.insert(HistoryStore.bare($0.url).lowercased()).inserted }
+                    let rows = (link.map { [Suggestion.clipboard($0)] } ?? []) + recent.map(Suggestion.page)
+                    guard !rows.isEmpty else { return }
+                    self.isZeroSuggest = true
+                    self.typed = ""
+                    self.completion = ""
+                    self.moved = false
+                    self.present(Array(rows.prefix(Self.maxRows)), typed: "", highlight: nil)
+                }
+            }
+        }
+    }
+
+    /// The URL on the clipboard, when there is one and reading it won't ask
+    /// the user's permission.
+    private static func copiedLink() -> String? {
+        let pasteboard = NSPasteboard.general
+        if #available(macOS 15.4, *), pasteboard.accessBehavior != .alwaysAllow { return nil }
+        guard pasteboard.availableType(from: [.string]) != nil,
+              let text = pasteboard.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              text.count < 2048, !text.contains(where: \.isWhitespace),
+              text.hasPrefix("https://") || text.hasPrefix("http://"),
+              let url = URL(string: text), url.host() != nil else { return nil }
+        return text
+    }
+
     // MARK: NSTextFieldDelegate
 
     func controlTextDidChange(_ notification: Notification) {
-        let text = addressBar.field.stringValue.trimmingCharacters(in: .whitespaces)
+        let field = addressBar.field
+        let text = field.stringValue
+        let caretAtEnd = (field.currentEditor()?.selectedRange.location ?? 0) == text.utf16.count
+        // Typing at the end completes; Delete, or an edit in the middle,
+        // leaves the text as it is.
+        completes = caretAtEnd && !deleting
+        deleting = false
+        typed = text
+        completion = ""
+        moved = false
+        isZeroSuggest = false
         generation += 1
-        guard !text.isEmpty else { return hide() }
+        let query = text.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else {
+            searchSuggest.cancel()
+            hide()
+            return showOnFocus()
+        }
         let generation = generation
+        // The engine's suggestions for the last keystroke stay while they
+        // still fit, until the ones for this arrive.
+        shownSearches = shownSearches.filter { $0.lowercased().hasPrefix(query.lowercased()) }
         // The row for the text itself follows every keystroke, over the
         // pages found for the last one; the ones for this come after.
-        show(shownPages, for: text)
-        profile.history.search(text, limit: Self.limit) { [weak self] pages in
+        show(for: query)
+        profile.history.search(query, limit: Self.maxRows) { [weak self] pages in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let self, self.generation == generation, self.addressBar.field.currentEditor() != nil else { return }
-                    self.show(pages, for: text)
+                    guard let self, self.generation == generation, self.addressBar.field.isEditing else { return }
+                    self.shownPages = pages
+                    self.show(for: query)
                 }
             }
+        }
+        searchSuggest.fetch(query, limit: Self.maxSearches + 1) { [weak self] searches in
+            guard let self, self.generation == generation, self.addressBar.field.isEditing else { return }
+            self.shownSearches = searches
+            self.show(for: query)
         }
     }
 
@@ -142,25 +279,60 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        guard isShown else {
-            // Escape with no list up puts the page's URL back, as in Safari.
-            guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
-            addressBar.field.revert()
+        let flags = OpenDisposition.currentFlags
+        deleting = selector.description.hasPrefix("delete")
+        // Ctrl+Return wraps a name in www. and .com, as in Chrome.
+        if selector == #selector(NSResponder.insertLineBreak(_:))
+            || (selector == #selector(NSResponder.insertNewline(_:)) && flags.contains(.control)) {
+            let name = (isShown ? typed : addressBar.field.stringValue).trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, !name.contains("."), !name.contains(" "), !name.contains(":"), !name.contains("/") else {
+                return false
+            }
+            hide(animated: false)
+            onOpen?("https://www.\(name).com/", .returnKey(flags), true)
             return true
         }
+        guard isShown else {
+            switch selector {
+            case #selector(NSResponder.cancelOperation(_:)):
+                // Escape with no list up puts the page's URL back, as in Safari.
+                addressBar.field.revert()
+                return true
+            case #selector(NSResponder.moveDown(_:)):
+                showOnFocus()
+                return true
+            default:
+                return false
+            }
+        }
         switch selector {
-        case #selector(NSResponder.moveDown(_:)):
-            highlight(min(rows.count - 1, (highlighted ?? 0) + 1), announce: true)
-        case #selector(NSResponder.moveUp(_:)):
-            highlight(max(0, (highlighted ?? 0) - 1), announce: true)
+        case #selector(NSResponder.moveDown(_:)), #selector(NSResponder.insertTab(_:)):
+            step(1)
+        case #selector(NSResponder.moveUp(_:)), #selector(NSResponder.insertBacktab(_:)):
+            step(-1)
         case #selector(NSResponder.cancelOperation(_:)):
-            hide()
+            if moved && !isZeroSuggest {
+                // Back to what was typed, then to the page's URL.
+                moved = false
+                restoreTyped()
+                highlight(0, announce: true)
+            } else {
+                hide()
+                addressBar.field.revert()
+            }
+        case #selector(NSResponder.deleteForward(_:)), #selector(NSResponder.deleteBackward(_:)):
+            // Shift+Delete forgets the highlighted page, as in Chrome.
+            guard flags.contains(.shift), moved, let index = highlighted, rows.indices.contains(index),
+                  rows[index].isRemovable else { return false }
+            // Nothing is deleted from the field.
+            deleting = false
+            remove(index)
         case #selector(NSResponder.insertNewline(_:)):
             guard let index = highlighted, rows.indices.contains(index) else {
                 hide(animated: false)
                 return false
             }
-            open(index, .returnKey(OpenDisposition.currentFlags))
+            open(index, .returnKey(flags))
         default:
             return false
         }
@@ -169,31 +341,92 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
 
     // MARK: List
 
-    /// The first row is the text itself, as a search or a site, and starts
-    /// highlighted, so Return does what the address bar would anyway. When
-    /// the best match's address starts with the text, that row is
-    /// highlighted instead, as Safari does.
-    /// The history pages the rows show, kept for the next keystroke.
-    private var shownPages: [HistoryPage] = []
-
-    private func show(_ pages: [HistoryPage], for text: String) {
-        shownPages = pages
+    /// Builds the rows for `text` from the pages and searches found so far
+    /// and completes the field from the first page when it can.
+    private func show(for text: String) {
+        let lower = text.lowercased()
+        let settings = profile.settings
+        let candidate = completes && typed == text ? Self.completionPage(for: lower, in: shownPages) : nil
         // A page the text's own row already opens, give or take scheme and
         // "www.", is left out.
-        let typedAddress = HistoryStore.bare(AddressInput.url(for: text, settings: profile.settings)).lowercased()
-        let pages = pages.filter { HistoryStore.bare($0.url).lowercased() != typedAddress }
-        rows = [.input(text)] + pages.map(Suggestion.page)
-        guard let window = addressBar.window else { return hide() }
-        for (index, row) in pool.enumerated() {
-            if rows.indices.contains(index) {
-                row.configure(rows[index], typed: text, settings: profile.settings)
+        var seen: Set<String> = [HistoryStore.bare(AddressInput.url(for: text, settings: settings)).lowercased()]
+        var rows: [Suggestion] = []
+        if let candidate {
+            rows.append(.page(candidate))
+            seen.insert(HistoryStore.bare(candidate.url).lowercased())
+        }
+        rows.append(.input(text))
+        var searches = Set([lower])
+        rows += shownSearches.filter { searches.insert($0.lowercased()).inserted }.prefix(Self.maxSearches).map(Suggestion.search)
+        // Open tabs whose title or address has the text, and history pages
+        // that are open, offer to switch to their tab.
+        let tabs = openTabs?() ?? []
+        var tabsByAddress: [String: OpenTab] = [:]
+        for tab in tabs { tabsByAddress[HistoryStore.bare(tab.url).lowercased(), default: tab] = tab }
+        let matchingTabs = tabs.filter {
+            $0.title.lowercased().contains(lower) || HistoryStore.bare($0.url).lowercased().contains(lower)
+        }
+        for tab in matchingTabs.prefix(Self.maxTabs) where seen.insert(HistoryStore.bare(tab.url).lowercased()).inserted {
+            rows.append(.openTab(tab))
+        }
+        for page in shownPages {
+            let address = HistoryStore.bare(page.url).lowercased()
+            guard seen.insert(address).inserted else { continue }
+            rows.append(tabsByAddress[address].map(Suggestion.openTab) ?? .page(page))
+        }
+        rows = Array(rows.prefix(Self.maxRows))
+
+        // The completion follows the first row, as long as the user hasn't
+        // moved off it.
+        if !moved {
+            let rest = candidate.map { Self.completion(of: $0, after: text) } ?? ""
+            if rest != completion {
+                completion = rest
+                if rest.isEmpty { addressBar.field.show(text: typed) } else { addressBar.field.show(typed: typed, completion: rest) }
+            }
+        }
+        let keep = moved ? highlighted.map { min($0, rows.count - 1) } : 0
+        present(rows, typed: text, highlight: keep)
+    }
+
+    /// The first of `pages` whose address, without scheme and "www.",
+    /// starts with `lower` and goes on past it, if it was typed before or
+    /// visited more than once, so a page seen in passing isn't completed.
+    static func completionPage(for lower: String, in pages: [HistoryPage]) -> HistoryPage? {
+        guard !lower.isEmpty, !lower.contains(" ") else { return nil }
+        return pages.first { page in
+            let address = displayAddress(page.url).lowercased()
+            return address.hasPrefix(lower) && address.count > lower.count && (page.typedCount > 0 || page.visitCount > 1)
+        }
+    }
+
+    /// What follows `text` in `page`'s address.
+    static func completion(of page: HistoryPage, after text: String) -> String {
+        String(displayAddress(page.url).dropFirst(text.count))
+    }
+
+    /// `url` without scheme, "www." and a lone trailing slash.
+    private static func displayAddress(_ url: String) -> String {
+        var address = HistoryStore.bare(url)
+        if address.hasSuffix("/"), address.firstIndex(of: "/") == address.index(before: address.endIndex) {
+            address.removeLast()
+        }
+        return address
+    }
+
+    /// Fills the rows and puts the panel under the capsule.
+    private func present(_ rows: [Suggestion], typed text: String, highlight index: Int?) {
+        self.rows = rows
+        guard let window = addressBar.window, !rows.isEmpty else { return hide() }
+        for (offset, row) in pool.enumerated() {
+            if rows.indices.contains(offset) {
+                row.configure(rows[offset], typed: text, settings: profile.settings)
                 row.isHidden = false
             } else {
                 row.isHidden = true
             }
         }
-        let host = pages.first.map { HistoryStore.bare($0.url).lowercased() } ?? ""
-        highlight(!host.isEmpty && host.hasPrefix(text.lowercased()) ? 1 : 0)
+        highlight(index)
 
         let capsule = addressBar.capsule
         let frame = window.convertToScreen(capsule.convert(capsule.bounds, to: nil))
@@ -214,6 +447,28 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
         }
     }
 
+    /// Moves the highlight by `offset`, wrapping round, and puts that row
+    /// in the field, or what was typed back on the first row.
+    private func step(_ offset: Int) {
+        guard !rows.isEmpty else { return }
+        let count = rows.count
+        let next = highlighted.map { ($0 + offset + count) % count } ?? (offset > 0 ? 0 : count - 1)
+        // Back on the first row counts as not moved, so Escape goes on to the
+        // page's URL.
+        moved = next != 0 || isZeroSuggest
+        if next == 0 && !isZeroSuggest {
+            restoreTyped()
+        } else {
+            addressBar.field.show(text: rows[next].fieldText)
+        }
+        highlight(next, announce: true)
+    }
+
+    /// What was typed, with its completion, back in the field.
+    private func restoreTyped() {
+        if completion.isEmpty { addressBar.field.show(text: typed) } else { addressBar.field.show(typed: typed, completion: completion) }
+    }
+
     /// With `announce`, as when Up or Down moves the highlight, VoiceOver
     /// reads the new row, since focus stays in the address field.
     private func highlight(_ index: Int?, announce: Bool = false) {
@@ -232,9 +487,38 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
 
     private func open(_ index: Int, _ disposition: OpenDisposition) {
         guard rows.indices.contains(index) else { return }
-        let url = rows[index].url(settings: profile.settings)
+        let row = rows[index]
         hide(animated: false)
-        onOpen?(url, disposition)
+        if case .openTab(let tab) = row, disposition == .currentTab {
+            onSwitchTab?(tab.id)
+            return
+        }
+        let url = row.url(settings: profile.settings)
+        let isSearch: Bool = switch row {
+        case .search: true
+        case .input(let text): url == profile.settings.searchURL(for: text)
+        default: false
+        }
+        onOpen?(url, disposition, !isSearch)
+    }
+
+    /// Forgets a history page, from Shift+Delete or its row's remove button.
+    private func remove(_ index: Int) {
+        guard rows.indices.contains(index), case .page(let page) = rows[index] else { return }
+        profile.history.remove(url: page.url)
+        let address = HistoryStore.bare(page.url).lowercased()
+        shownPages.removeAll { HistoryStore.bare($0.url).lowercased() == address }
+        if isZeroSuggest {
+            var rows = rows
+            rows.remove(at: index)
+            let next = rows.isEmpty ? nil : min(index, rows.count - 1)
+            present(rows, typed: "", highlight: highlighted == nil ? nil : next)
+            return
+        }
+        moved = false
+        completion = ""
+        addressBar.field.show(text: typed)
+        show(for: typed.trimmingCharacters(in: .whitespaces))
     }
 }
 
@@ -280,11 +564,14 @@ private final class SuggestionsPanel: NSPanel {
 /// One suggestion: for a page, its site's favicon, or a clock without one,
 /// the page's title with the typed text in bold where it matches, then its
 /// address in grey; for the typed text, a magnifying glass or globe and
-/// what Return would do with it. The highlighted row takes the system's
-/// selection colors, so it follows the accent color and contrast settings.
+/// what Return would do with it; for an open tab, its favicon and "Switch
+/// to This Tab". The highlighted row takes the system's selection colors,
+/// so it follows the accent color and contrast settings, and a page's
+/// highlighted row has a button that forgets it.
 private final class SuggestionRow: NSView {
     var onHover: (() -> Void)?
     var onClick: ((OpenDisposition) -> Void)?
+    var onRemove: (() -> Void)?
 
     var isHighlighted = false {
         didSet {
@@ -294,6 +581,9 @@ private final class SuggestionRow: NSView {
             updateColors()
         }
     }
+
+    private let removeButton = HoverButton()
+    private var isRemovable = false
 
     private var isPressed = false {
         didSet { if isPressed != oldValue { needsDisplay = true } }
@@ -344,9 +634,24 @@ private final class SuggestionRow: NSView {
         stack.setCustomSpacing(6, after: icon)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
+        removeButton.bezelStyle = .accessoryBarAction
+        removeButton.isBordered = false
+        removeButton.imagePosition = .imageOnly
+        removeButton.image = Theme.closeImage(label: "Remove from History")
+        removeButton.toolTip = "Remove from History"
+        removeButton.plateRadius = Theme.ButtonSize.inline / 2
+        removeButton.target = self
+        removeButton.action = #selector(removeClicked(_:))
+        removeButton.isHidden = true
+        removeButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(removeButton)
         NSLayoutConstraint.activate([
+            removeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            removeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            removeButton.widthAnchor.constraint(equalToConstant: Theme.ButtonSize.inline),
+            removeButton.heightAnchor.constraint(equalToConstant: Theme.ButtonSize.inline),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: removeButton.leadingAnchor, constant: -4),
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
             // Only once the address is in the row: the two need a common ancestor.
             url.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, multiplier: 0.4),
@@ -358,6 +663,7 @@ private final class SuggestionRow: NSView {
         self.typed = typed
         var address = ""
         var tip = ""
+        isRemovable = suggestion.isRemovable
         switch suggestion {
         case .page(let page):
             titleText = page.displayTitle
@@ -369,6 +675,24 @@ private final class SuggestionRow: NSView {
             } else {
                 showSymbol("clock", "History")
             }
+        case .search(let text):
+            titleText = text
+            tip = settings.searchURL(for: text)
+            showSymbol("magnifyingglass", "Search")
+        case .openTab(let tab):
+            titleText = tab.title.isEmpty ? HistoryStore.bare(tab.url) : tab.title
+            address = "Switch to This Tab"
+            tip = tab.url
+            if let favicon = tab.favicon {
+                showFavicon(favicon, key: "tab:" + tab.url)
+            } else {
+                showSymbol("square.on.square", "Open Tab")
+            }
+        case .clipboard(let link):
+            titleText = "Link You Copied"
+            address = HistoryStore.bare(link)
+            tip = link
+            showSymbol("doc.on.clipboard", "Clipboard")
         case .input(let text):
             let url = AddressInput.url(for: text, settings: settings)
             let isSearch = url == settings.searchURL(for: text)
@@ -414,6 +738,12 @@ private final class SuggestionRow: NSView {
         title.attributedStringValue = Self.highlighting(titleText, typed, color: isHighlighted ? Theme.selectionText : Theme.text)
         url.textColor = isHighlighted ? Theme.selectionText.dynamic(alpha: 0.75) : Theme.secondaryText
         if !showsFavicon { icon.contentTintColor = isHighlighted ? Theme.selectionText : Theme.secondaryText }
+        removeButton.contentTintColor = isHighlighted ? Theme.selectionText : Theme.secondaryText
+        removeButton.isHidden = !(isHighlighted && isRemovable)
+    }
+
+    @objc private func removeClicked(_ sender: Any?) {
+        onRemove?()
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -480,5 +810,13 @@ private final class SuggestionRow: NSView {
     override func accessibilityPerformPress() -> Bool {
         onClick?(.currentTab)
         return true
+    }
+
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        guard isRemovable else { return nil }
+        return [NSAccessibilityCustomAction(name: "Remove from History") { [weak self] in
+            self?.onRemove?()
+            return true
+        }]
     }
 }

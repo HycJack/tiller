@@ -230,12 +230,12 @@ struct ChromeReader: Sendable {
     func history() throws -> [HistoryPage] {
         try withDatabase("History") { db in
             try db.query("""
-                SELECT url, title, visit_count, last_visit_time FROM urls
+                SELECT url, title, visit_count, last_visit_time, typed_count FROM urls
                 WHERE hidden = 0 AND (url LIKE 'http://%' OR url LIKE 'https://%')
                 """) { row in
                 HistoryPage(
                     url: row.string(0), title: row.string(1), visitCount: Int(row.int(2)),
-                    lastVisit: ChromeTime.date(row.int(3))
+                    lastVisit: ChromeTime.date(row.int(3)), typedCount: Int(row.int(4))
                 )
             }
         } ?? []

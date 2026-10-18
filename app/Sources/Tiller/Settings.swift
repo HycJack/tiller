@@ -26,6 +26,18 @@ enum SearchEngine: String, CaseIterable {
         case .custom: nil
         }
     }
+
+    /// Where the address bar asks for suggestions as you type, with `%s`
+    /// for the query. Each answers in the OpenSearch form, `[query,
+    /// [suggestion, ...]]`. Nil for `custom`, which has none.
+    var suggestTemplate: String? {
+        switch self {
+        case .google: "https://www.google.com/complete/search?client=firefox&ie=utf-8&oe=utf-8&q=%s"
+        case .bing: "https://api.bing.com/osjson.aspx?query=%s"
+        case .duckduckgo: "https://duckduckgo.com/ac/?type=list&q=%s"
+        case .custom: nil
+        }
+    }
 }
 
 /// What Cmd+T opens.
@@ -351,16 +363,43 @@ struct ProfileSettings: @unchecked Sendable {
         nonmutating set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "searchTemplate") }
     }
 
+    /// Whether the address bar asks the search engine for suggestions as
+    /// you type. On unless turned off.
+    var searchSuggestions: Bool {
+        get { defaults.object(forKey: "searchSuggestions") as? Bool ?? true }
+        nonmutating set { defaults.set(newValue, forKey: "searchSuggestions") }
+    }
+
+    /// Whether the address bar shows `https://`, `www.` and a lone trailing
+    /// slash, which it otherwise leaves out until you click it.
+    var showsFullURLs: Bool {
+        get { defaults.bool(forKey: "showsFullURLs") }
+        nonmutating set {
+            defaults.set(newValue, forKey: "showsFullURLs")
+            NotificationCenter.default.post(name: .addressDisplayDidChange, object: nil)
+        }
+    }
+
     /// The camera and microphone choices saved for each site.
     var sitePermissions: SitePermissions { SitePermissions(defaults: defaults) }
+
+    /// The engine's suggestion URL for `query`, or nil when it has none.
+    func suggestURL(for query: String) -> URL? {
+        guard let template = searchEngine.suggestTemplate else { return nil }
+        return URL(string: template.replacingOccurrences(of: "%s", with: Self.encode(query)))
+    }
 
     /// The search URL for `query`. A custom template that isn't valid falls back to Google.
     func searchURL(for query: String) -> String {
         var template = searchEngine.template ?? searchTemplate
         if !Settings.isValidSearchTemplate(template) { template = SearchEngine.google.template! }
+        return template.replacingOccurrences(of: "%s", with: Self.encode(query))
+    }
+
+    /// `query` made safe for a URL's query string.
+    private static func encode(_ query: String) -> String {
         let allowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+=?#/"))
-        let encoded = query.addingPercentEncoding(withAllowedCharacters: allowed) ?? query
-        return template.replacingOccurrences(of: "%s", with: encoded)
+        return query.addingPercentEncoding(withAllowedCharacters: allowed) ?? query
     }
 
     /// The CLI to run for `kind`, with `~` expanded. Nil means look it up.
@@ -478,6 +517,8 @@ extension Notification.Name {
     static let agentModelOptionsDidChange = Notification.Name("TillerAgentModelOptionsDidChange")
     /// Posted when a profile's `agentTabs` changes.
     static let agentTabsDidChange = Notification.Name("TillerAgentTabsDidChange")
+    /// Posted when a profile's `showsFullURLs` changes.
+    static let addressDisplayDidChange = Notification.Name("TillerAddressDisplayDidChange")
     /// Posted when a profile's `tabLayout` changes.
     static let tabLayoutDidChange = Notification.Name("TillerTabLayoutDidChange")
     /// Posted when `Settings.appearance`, `Settings.theme` or `Settings.accentTheme` changes.

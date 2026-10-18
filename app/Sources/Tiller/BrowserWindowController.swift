@@ -48,6 +48,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// Hidden until the first download of the run.
     private let downloadsButton = DownloadsButton()
     private var downloadsPopover: NSPopover?
+    private var siteInfoPopover: NSPopover?
     /// The extension popup while one is open.
     private var extensionPopover: ExtensionPopover?
     /// Nil while there is only one profile.
@@ -230,6 +231,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         center.addObserver(self, selector: #selector(passwordsChanged(_:)), name: .passwordsDidChange, object: profile.passwords)
         center.addObserver(self, selector: #selector(tabLayoutChanged(_:)), name: .tabLayoutDidChange, object: nil)
         center.addObserver(self, selector: #selector(themeChanged(_:)), name: .themeDidChange, object: nil)
+        center.addObserver(self, selector: #selector(addressDisplayChanged(_:)), name: .addressDisplayDidChange, object: nil)
         center.addObserver(self, selector: #selector(downloadsChanged(_:)), name: .downloadsDidChange, object: nil)
         center.addObserver(self, selector: #selector(downloadStarted(_:)), name: .downloadDidStart, object: nil)
         watchForUnloading()
@@ -548,7 +550,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         }
         guard !tab.isLoading else { return }
         if tab.recordedVisit?.url != tab.url {
-            profile.history.recordVisit(url: tab.url, title: tab.title)
+            profile.history.recordVisit(url: tab.url, title: tab.title, typed: tab.typedNavigation)
+            tab.typedNavigation = false
         } else if tab.recordedVisit?.title != tab.title {
             profile.history.setTitle(tab.title, for: tab.url)
         } else {
@@ -1194,31 +1197,65 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     @objc func openLocation(_ sender: Any?) {
         // Already editing: keep what was typed and select it.
-        if !addressBar.field.isEditing { window?.makeFirstResponder(addressBar.field) }
+        let editing = addressBar.field.isEditing
+        if !editing { window?.makeFirstResponder(addressBar.field) }
         addressBar.field.currentEditor()?.selectAll(nil)
+        // Asked for from the menu or Cmd+L, rather than by a new tab taking
+        // the field, the recent pages come up as they do on a click.
+        if sender != nil, !editing { suggestions.showOnFocus() }
     }
 
-    /// Loads a suggestion picked from the address bar's list.
     /// Opens a URL chosen in the address bar, its suggestions or the start
-    /// page. A new tab goes right after the selected one.
-    private func open(_ url: String, _ disposition: OpenDisposition) {
+    /// page. A new tab goes right after the selected one. A `typed` address,
+    /// as opposed to a search, counts as typed in history once it loads.
+    private func open(_ url: String, _ disposition: OpenDisposition, typed: Bool = false) {
         guard let tab = selectedTab else { return }
         switch disposition {
         case .currentTab:
             tab.load(url)
+            tab.typedNavigation = typed
             addressBar.show(url)
             tab.focus()
         case .foregroundTab, .backgroundTab:
             let index = tabs.firstIndex { $0 === tab }.map { $0 + 1 }
             if disposition == .backgroundTab { addressBar.show(tab.url) }
-            openTab(url: url, select: disposition == .foregroundTab, at: index)
+            openTab(url: url, select: disposition == .foregroundTab, at: index).typedNavigation = typed
         }
     }
 
     @objc private func addressEntered(_ sender: NSTextField) {
         let input = sender.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
-        open(AddressInput.url(for: input, settings: profile.settings), .returnKey(OpenDisposition.currentFlags))
+        go(to: input)
+    }
+
+    /// Opens what was typed or pasted: the address it names, or a search.
+    private func go(to input: String) {
+        let url = AddressInput.url(for: input, settings: profile.settings)
+        open(url, .returnKey(OpenDisposition.currentFlags), typed: url != profile.settings.searchURL(for: input))
+    }
+
+    /// The window's tabs other than the selected one, for the address bar's
+    /// suggestions to switch to.
+    private func otherTabs() -> [AddressSuggestions.OpenTab] {
+        tabs.filter { $0 !== selectedTab && !$0.isBlank }.map {
+            AddressSuggestions.OpenTab(id: ObjectIdentifier($0), url: $0.url, title: $0.title, favicon: $0.favicon)
+        }
+    }
+
+    @objc private func showSiteInfo(_ sender: Any?) {
+        if let siteInfoPopover, siteInfoPopover.isShown { return siteInfoPopover.close() }
+        guard let tab = selectedTab, tab.url.hasPrefix("http://") || tab.url.hasPrefix("https://") else { return }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = SiteInfoController(url: tab.url, permissions: profile.settings.sitePermissions)
+        siteInfoPopover = popover
+        let anchor = addressBar.siteButton
+        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
+    }
+
+    @objc private func addressDisplayChanged(_ notification: Notification) {
+        addressBar.field.showsFullURL = profile.settings.showsFullURLs
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
@@ -1658,13 +1695,31 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
         addressBar.field.target = self
         addressBar.field.action = #selector(addressEntered(_:))
+        addressBar.field.showsFullURL = profile.settings.showsFullURLs
+        addressBar.field.onClickFocus = { [weak self] in self?.suggestions.showOnFocus() }
+        addressBar.field.onPasteAndGo = { [weak self] text in
+            self?.suggestions.hide(animated: false)
+            self?.go(to: text)
+        }
+        addressBar.field.onToggleFullURLs = { [weak self] in
+            guard let settings = self?.profile.settings else { return }
+            settings.showsFullURLs.toggle()
+        }
+        addressBar.siteButton.target = self
+        addressBar.siteButton.action = #selector(showSiteInfo(_:))
         sidebar.collapseButton.target = self
         sidebar.collapseButton.action = #selector(toggleSidebarCollapsed(_:))
         addressBar.keyButton.target = self
         addressBar.keyButton.action = #selector(fillPassword(_:))
         addressBar.zoomButton.target = self
         addressBar.zoomButton.action = #selector(actualSize(_:))
-        suggestions.onOpen = { [weak self] url, disposition in self?.open(url, disposition) }
+        suggestions.onOpen = { [weak self] url, disposition, typed in self?.open(url, disposition, typed: typed) }
+        suggestions.onSwitchTab = { [weak self] id in
+            guard let self, let tab = self.tabs.first(where: { ObjectIdentifier($0) == id }) else { return }
+            self.addressBar.show(self.selectedTab?.url ?? "")
+            self.select(tab)
+        }
+        suggestions.openTabs = { [weak self] in self?.otherTabs() ?? [] }
         extensionBar.onPopup = { [weak self] manifest, anchor in self?.showExtensionPopup(manifest, from: anchor) }
         extensionBar.onOpen = { [weak self] url in self?.openInNewTab(url) }
         extensionBar.onResize = { [weak self] in
@@ -1997,6 +2052,13 @@ extension BrowserWindowController {
             if let editor = addressBar.field.currentEditor() as? NSTextView {
                 editor.insertText(text, replacementRange: editor.selectedRange())
             }
+        case "locationCommand":
+            // A text command in the address field, such as `moveDown:`, as
+            // the keys bound to it would send.
+            guard let editor = addressBar.field.currentEditor() as? NSTextView else {
+                throw ControlError("the address bar isn't being edited")
+            }
+            editor.doCommand(by: Selector(text))
         case "downloads":
             showDownloads(nil)
         case "sidebar":

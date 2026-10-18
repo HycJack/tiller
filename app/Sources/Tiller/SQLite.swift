@@ -145,6 +145,8 @@ final class SQLiteDatabase: @unchecked Sendable {
 
         func int(_ column: Int32) -> Int64 { sqlite3_column_int64(statement, column) }
         func double(_ column: Int32) -> Double { sqlite3_column_double(statement, column) }
+        /// How many columns the query returns.
+        var columns: Int { Int(sqlite3_column_count(statement)) }
 
         func string(_ column: Int32) -> String {
             sqlite3_column_text(statement, column).map { String(cString: $0) } ?? ""

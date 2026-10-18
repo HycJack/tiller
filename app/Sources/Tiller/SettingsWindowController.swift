@@ -446,6 +446,7 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
     private var accentNote: NSTextField?
     private var remoteDebuggingButton: NSButton?
     private var searchPopUp: NSPopUpButton?
+    private var searchSuggestionsButton: NSButton?
     private let templateField = NSTextField()
     private let templateNote = SettingsPane.note()
     private let defaultBrowserButton = NSButton(title: "Make Default", target: nil, action: nil)
@@ -556,6 +557,14 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
         addNote(templateNote)
         showTemplateState()
 
+        let suggestions = NSButton(
+            checkboxWithTitle: "Show search suggestions", target: self, action: #selector(searchSuggestionsChanged(_:))
+        )
+        suggestions.state = settings.searchSuggestions ? .on : .off
+        searchSuggestionsButton = suggestions
+        Self.linkLabel(of: addRow("Address bar:", suggestions), to: suggestions)
+        addNote(Self.note("Sends what you type to the search engine. Custom engines have none."))
+
         if Updater.isAvailable {
             let automatic = NSButton(checkboxWithTitle: "Check automatically", target: self, action: #selector(automaticUpdatesChanged(_:)))
             automatic.state = Updater.shared.automaticallyChecks ? .on : .off
@@ -598,6 +607,7 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
         remoteDebuggingButton?.state = Settings.remoteDebuggingEnabled ? .on : .off
         searchPopUp?.selectItem(at: SearchEngine.allCases.firstIndex(of: settings.searchEngine) ?? 0)
         showTemplateState()
+        searchSuggestionsButton?.state = settings.searchSuggestions ? .on : .off
     }
 
     func controlTextDidChange(_ notification: Notification) {
@@ -702,6 +712,10 @@ final class GeneralSettingsPane: SettingsPane, NSTextFieldDelegate {
 
     @objc private func betaUpdatesChanged(_ sender: NSButton) {
         Updater.includesBetas = sender.state == .on
+    }
+
+    @objc private func searchSuggestionsChanged(_ sender: NSButton) {
+        settings.searchSuggestions = sender.state == .on
     }
 
     @objc private func searchEngineChanged(_ sender: NSPopUpButton) {

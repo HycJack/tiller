@@ -104,6 +104,9 @@ final class Tab {
     var recordedVisit: (url: String, title: String)?
     /// The favicon last saved for the start page.
     var recordedIcon: Data?
+    /// Set when the address bar opened an address in the tab, so the page
+    /// it lands on, after any redirects, counts as typed in history.
+    var typedNavigation = false
 
     var isBlank: Bool { Self.isBlank(url) }
 

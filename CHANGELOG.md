@@ -7,6 +7,19 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+- The address bar works more like Chrome's. Typing completes the address
+  of a page you've typed or visited before right in the bar, and the list
+  under it adds the search engine's suggestions, which Settings > General
+  can turn off, and open tabs to switch to. Up and Down put each row in the
+  bar and wrap round, Tab moves through the list too, Shift+Delete or a
+  row's cross removes a page from history, and Ctrl+Return adds `www.` and
+  `.com`. Pages you typed rank higher. Clicking the bar, Cmd+L or Down lists
+  recent pages and a link you copied.
+- At rest the address bar leaves out `https://`, `www.` and a lone trailing
+  slash, which right-click > Always Show Full URLs keeps. Http pages say
+  "Not Secure", and the icon before the address opens the site's
+  information with its camera and microphone permissions. The right-click
+  menu has Paste and Go, and a drag in the bar selects part of the address.
 - On the start page, a recently closed tab with a long address shows its
   title again; the address is cut short instead of the title.
 

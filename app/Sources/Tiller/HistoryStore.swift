@@ -6,6 +6,9 @@ struct HistoryPage: Sendable {
     let title: String
     let visitCount: Int
     let lastVisit: Date
+    /// How many visits started with the address typed in the address bar,
+    /// or picked from its suggestions.
+    var typedCount = 0
     /// The site's favicon, which only `search` fills in.
     var icon: Data?
 
@@ -66,6 +69,7 @@ final class HistoryStore: @unchecked Sendable {
                     png BLOB NOT NULL
                 );
                 """)
+            try Self.migrate(db)
             self.db = db
         } catch {
             NSLog("Tiller: history unavailable: \(error)")
@@ -73,15 +77,37 @@ final class HistoryStore: @unchecked Sendable {
         }
     }
 
-    /// Counts a visit to `url`, and keeps `title` unless it is empty.
-    func recordVisit(url: String, title: String) {
+    /// Version 1 added `typed_count`, which a file from before lacks.
+    private static func migrate(_ db: SQLiteDatabase) throws {
+        let version = try db.query("PRAGMA user_version", cache: false) { $0.int(0) }.first ?? 0
+        guard version < 1 else { return }
+        let columns = try db.query("PRAGMA table_info(pages)", cache: false) { $0.string(1) }
+        if !columns.contains("typed_count") {
+            try db.execute("ALTER TABLE pages ADD COLUMN typed_count INTEGER NOT NULL DEFAULT 0")
+        }
+        try db.execute("PRAGMA user_version = 1")
+    }
+
+    /// Counts a visit to `url`, and keeps `title` unless it is empty. A
+    /// `typed` visit came from the address bar, which counts for inline
+    /// completion.
+    func recordVisit(url: String, title: String, typed: Bool = false) {
         write("""
-            INSERT INTO pages (url, title, visit_count, last_visit) VALUES (?, ?, 1, ?)
+            INSERT INTO pages (url, title, visit_count, typed_count, last_visit) VALUES (?, ?, 1, ?, ?)
             ON CONFLICT (url) DO UPDATE SET
                 visit_count = visit_count + 1,
+                typed_count = typed_count + excluded.typed_count,
                 last_visit = excluded.last_visit,
                 title = CASE WHEN excluded.title = '' THEN title ELSE excluded.title END
-            """, [url, title, Date().timeIntervalSince1970])
+            """, [url, title, typed ? 1 : 0, Date().timeIntervalSince1970])
+    }
+
+    /// Forgets `url` and the pages that differ from it only in scheme or
+    /// "www.", as the address bar shows them as one.
+    func remove(url: String) {
+        let bare = Self.bare(url)
+        let variants = ["http://", "https://"].flatMap { ["\($0)\(bare)", "\($0)www.\(bare)"] }
+        write("DELETE FROM pages WHERE url IN (?, ?, ?, ?)", variants)
     }
 
     func setTitle(_ title: String, for url: String) {
@@ -190,10 +216,12 @@ final class HistoryStore: @unchecked Sendable {
         }
     }
 
-    /// Pages whose URL or title contains `text`, best first: URLs that start
-    /// with it, then titles with a word that starts with it, then the rest,
-    /// each by visit count, with their sites' favicons. Of pages that differ
-    /// only in scheme or "www.", only the first is kept. `completion` runs on the store's queue. A search
+    /// Pages whose URL or title contains `text`, best first: a site's own
+    /// address that starts with it, then other URLs that do, then titles
+    /// with a word that starts with it, then the rest. Within each, pages
+    /// visited and typed often and lately come first. Each comes with its
+    /// site's favicon. Of pages that differ only in scheme or "www.", only
+    /// the first is kept. `completion` runs on the store's queue. A search
     /// that a newer one replaces before it runs never completes, so typing
     /// fast doesn't queue up a scan per keystroke.
     func search(_ text: String, limit: Int, completion: @escaping @Sendable ([HistoryPage]) -> Void) {
@@ -207,22 +235,24 @@ final class HistoryStore: @unchecked Sendable {
                 .replacingOccurrences(of: "%", with: "\\%")
                 .replacingOccurrences(of: "_", with: "\\_") + "%"
             let pages = (try? db?.query("""
-                SELECT url, title, visit_count, last_visit FROM pages
+                SELECT url, title, visit_count, last_visit, typed_count FROM pages
                 WHERE url LIKE ?1 ESCAPE '\\' OR title LIKE ?1 ESCAPE '\\'
-                ORDER BY visit_count DESC, last_visit DESC LIMIT 300
+                ORDER BY typed_count DESC, visit_count DESC, last_visit DESC LIMIT 300
                 """, [pattern], row: Self.page)) ?? []
             let query = text.lowercased()
-            let ranked = pages.map { page -> (HistoryPage, Int) in
-                if Self.bare(page.url).lowercased().hasPrefix(query) { return (page, 2) }
+            let now = Date()
+            let ranked = pages.map { page -> (page: HistoryPage, rank: Int, score: Double) in
+                let score = Self.frecency(page, now: now)
+                let bare = Self.bare(page.url).lowercased()
+                if bare.hasPrefix(query) { return (page, Self.isSiteRoot(bare) ? 3 : 2, score) }
                 let words = page.title.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-                return (page, words.contains { $0.hasPrefix(query) } ? 1 : 0)
+                return (page, words.contains { $0.hasPrefix(query) } ? 1 : 0, score)
             }
-            // A stable sort keeps the query's visit-count order within each rank.
-            let best = ranked.enumerated().sorted { ($0.element.1, -$0.offset) > ($1.element.1, -$1.offset) }
+            let best = ranked.sorted { ($0.rank, $0.score) > ($1.rank, $1.score) }
             // Pages that differ only in scheme or "www." look the same in the
             // list, so only the best of them is kept.
             var seen = Set<String>()
-            let top = best.map(\.element.0).filter { seen.insert(Self.bare($0.url).lowercased()).inserted }.prefix(limit)
+            let top = best.map(\.page).filter { seen.insert(Self.bare($0.url).lowercased()).inserted }.prefix(limit)
             let icons = Self.icons(for: Array(Set(top.compactMap { Self.host(of: $0.url) })), in: db)
             completion(top.map { page in
                 var page = page
@@ -230,6 +260,27 @@ final class HistoryStore: @unchecked Sendable {
                 return page
             })
         }
+    }
+
+    /// How much a page is worth suggesting: its visits, with typed ones
+    /// counting more, weighed down the longer ago the last one was.
+    static func frecency(_ page: HistoryPage, now: Date = Date()) -> Double {
+        let days = now.timeIntervalSince(page.lastVisit) / 86_400
+        let recency: Double = switch days {
+        case ..<4: 1
+        case ..<14: 0.7
+        case ..<31: 0.5
+        case ..<90: 0.3
+        default: 0.1
+        }
+        return Double(page.visitCount + 4 * page.typedCount) * recency
+    }
+
+    /// Whether `bare`, an address without its scheme, is a site's front
+    /// page, with no path, query or fragment.
+    static func isSiteRoot(_ bare: String) -> Bool {
+        guard let end = bare.firstIndex(where: { "/?#".contains($0) }) else { return true }
+        return bare[end...] == "/"
     }
 
     /// Merges pages from another browser. An existing page keeps its title and
@@ -256,12 +307,15 @@ final class HistoryStore: @unchecked Sendable {
             do {
                 try db.transaction {
                     try db.runEach("""
-                        INSERT INTO pages (url, title, visit_count, last_visit) VALUES (?, ?, ?, ?)
+                        INSERT INTO pages (url, title, visit_count, typed_count, last_visit) VALUES (?, ?, ?, ?, ?)
                         ON CONFLICT (url) DO UPDATE SET
                             visit_count = max(visit_count, excluded.visit_count),
+                            typed_count = max(typed_count, excluded.typed_count),
                             last_visit = max(last_visit, excluded.last_visit),
                             title = CASE WHEN title = '' THEN excluded.title ELSE title END
-                        """, chunk.map { [$0.url, $0.title, $0.visitCount, $0.lastVisit.timeIntervalSince1970] })
+                        """, chunk.map {
+                            [$0.url, $0.title, $0.visitCount, $0.typedCount, $0.lastVisit.timeIntervalSince1970]
+                        })
                 }
             } catch {
                 // The chunks after it are dropped. Those before are kept,
@@ -299,10 +353,13 @@ final class HistoryStore: @unchecked Sendable {
         }
     }
 
+    /// A page from `url, title, visit_count, last_visit`, and `typed_count`
+    /// when the query asks for it.
     private static func page(_ row: SQLiteDatabase.Row) -> HistoryPage {
         HistoryPage(
             url: row.string(0), title: row.string(1), visitCount: Int(row.int(2)),
-            lastVisit: Date(timeIntervalSince1970: row.double(3))
+            lastVisit: Date(timeIntervalSince1970: row.double(3)),
+            typedCount: row.columns > 4 ? Int(row.int(4)) : 0
         )
     }
 

@@ -1,12 +1,16 @@
 import AppKit
 
-/// A glass capsule holding a lock for secure pages, the address field
+/// A glass capsule holding the site's button, which says whether the
+/// connection is secure and opens the site's settings, the address field
 /// and, at the end, the zoom and a key button that fills a saved login. It
 /// is a titlebar accessory under the tabs, or a toolbar item when the tabs
 /// are in the sidebar. While a page loads, the capsule fills with a faint
 /// tint from the left, as in Safari.
 final class AddressBarView: NSView {
     let field = AddressField()
+    /// Shows whether the page's connection is secure, and opens the site's
+    /// information when clicked.
+    let siteButton: NSButton = HoverButton()
     let keyButton: NSButton = HoverButton()
     /// The page's zoom, when it isn't 100%. Clicking it resets.
     let zoomButton: NSButton = HoverButton()
@@ -18,9 +22,10 @@ final class AddressBarView: NSView {
         }
     }
 
-    private let statusIcon = NSImageView()
-    /// The symbol `statusIcon` shows, so it is only made when it changes.
+    /// The symbol `siteButton` shows, so it is only made when it changes.
     private var statusSymbol = ""
+    /// The URL the status was last shown for.
+    private var statusURL = ""
     /// Whether the user is typing, when the icon says what Return would do.
     private var isEditing = false
     private let glass = GlassView()
@@ -30,6 +35,9 @@ final class AddressBarView: NSView {
     private var progressFraction: CGFloat = 0
     private var capsuleLeading: NSLayoutConstraint!
     private var capsuleTrailing: NSLayoutConstraint!
+    /// Room between the site button and the field, more when the button
+    /// has words.
+    private var fieldLeading: NSLayoutConstraint!
     /// Whether the tint is tracking a load, as opposed to finishing or hidden.
     private var showsLoad = false
     /// The capsule, for placing the suggestion list under it.
@@ -50,8 +58,15 @@ final class AddressBarView: NSView {
         // Only Return navigates. Leaving the field must not load what it shows.
         field.cell?.sendsActionOnEndEditing = false
 
-        statusIcon.contentTintColor = Theme.secondaryText
-        statusIcon.imageScaling = .scaleNone
+        siteButton.bezelStyle = .accessoryBarAction
+        siteButton.isBordered = false
+        siteButton.imagePosition = .imageLeading
+        siteButton.imageHugsTitle = true
+        siteButton.font = .systemFont(ofSize: Theme.FontSize.secondary, weight: .medium)
+        siteButton.contentTintColor = Theme.secondaryText
+        (siteButton as? HoverButton)?.plateRadius = Theme.ButtonSize.inline / 2
+        siteButton.setContentHuggingPriority(.required, for: .horizontal)
+        siteButton.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         keyButton.bezelStyle = .accessoryBarAction
         keyButton.isBordered = false
@@ -79,7 +94,7 @@ final class AddressBarView: NSView {
         content.layer?.masksToBounds = true
         progressFill.alphaValue = 0
         content.addSubview(progressFill)
-        for view in [statusIcon, field, buttons] as [NSView] {
+        for view in [siteButton, field, buttons] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
@@ -90,16 +105,20 @@ final class AddressBarView: NSView {
 
         capsuleLeading = glass.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset)
         capsuleTrailing = glass.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -inset)
+        fieldLeading = field.leadingAnchor.constraint(equalTo: siteButton.trailingAnchor, constant: 0)
         NSLayoutConstraint.activate([
             capsuleLeading,
             capsuleTrailing,
             glass.centerYAnchor.constraint(equalTo: centerYAnchor),
             glass.heightAnchor.constraint(equalToConstant: Theme.Capsule.height),
 
-            statusIcon.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
-            statusIcon.centerYAnchor.constraint(equalTo: content.centerYAnchor),
-            statusIcon.widthAnchor.constraint(equalToConstant: 16),
-            field.leadingAnchor.constraint(equalTo: statusIcon.trailingAnchor, constant: 6),
+            // The button's icon sits where a 16-point icon 10 from the edge
+            // would, with the text 6 after it, where the suggestions line up.
+            siteButton.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 4),
+            siteButton.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+            siteButton.heightAnchor.constraint(equalToConstant: Theme.ButtonSize.inline),
+            siteButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 28),
+            fieldLeading,
             field.centerYAnchor.constraint(equalTo: content.centerYAnchor),
             field.trailingAnchor.constraint(equalTo: buttons.leadingAnchor, constant: -4),
             buttons.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
@@ -109,7 +128,11 @@ final class AddressBarView: NSView {
             keyButton.heightAnchor.constraint(equalToConstant: Theme.ButtonSize.inline),
             zoomButton.heightAnchor.constraint(equalToConstant: Theme.ButtonSize.inline),
         ])
-        content.onResize = { [weak self] in self?.resizeProgress() }
+        content.onResize = { [weak self] in
+            guard let self else { return }
+            self.resizeProgress()
+            self.showStatus(of: self.statusURL, force: true)
+        }
         field.onEditingChanged = { [weak self, weak content] editing in
             guard let self else { return }
             self.isEditing = editing
@@ -195,27 +218,40 @@ final class AddressBarView: NSView {
         showStatus(of: url)
     }
 
-    /// A lock for https, a warning for http, and a magnifying glass where
-    /// there is no page yet or while typing, when Return searches or goes
-    /// to what was typed rather than the page shown before.
-    private func showStatus(of url: String) {
-        let (symbol, description) = if isEditing {
+    /// As in Chrome: sliders for https, which open the site's settings, a
+    /// warning with "Not Secure" for http, the text left out when the bar
+    /// is narrow, and a magnifying glass where there is no page yet or
+    /// while typing, when Return searches or goes to what was typed rather
+    /// than the page shown before. Only a web page's button can be clicked.
+    private func showStatus(of url: String, force: Bool = false) {
+        statusURL = url
+        let web = !isEditing && (url.hasPrefix("https://") || url.hasPrefix("http://"))
+        let (symbol, description) = if isEditing || url.isEmpty || url == "about:blank" {
             ("magnifyingglass", "Search")
         } else if url.hasPrefix("https://") {
-            ("lock.fill", "Secure")
+            ("slider.horizontal.3", "View Site Information")
         } else if url.hasPrefix("http://") {
             ("exclamationmark.triangle", "Not Secure")
-        } else if url.isEmpty || url == "about:blank" {
-            ("magnifyingglass", "Search")
         } else {
-            ("globe", "Page")
+            ("info.circle", "Page")
         }
+        let notSecure = web && url.hasPrefix("http://")
+        let title = notSecure && glass.bounds.width >= Self.chipMinWidth ? "Not Secure" : ""
+        guard force || statusSymbol != symbol || siteButton.title != title || siteButton.isEnabled != web else { return }
         if statusSymbol != symbol {
             statusSymbol = symbol
-            statusIcon.image = Theme.symbol(symbol, size: Theme.Symbol.inline, label: description)
+            siteButton.image = Theme.symbol(symbol, size: Theme.Symbol.inline, label: description)
         }
-        statusIcon.toolTip = !isEditing && url.hasPrefix("http") ? description : nil
+        siteButton.title = title
+        fieldLeading.constant = title.isEmpty ? 0 : 4
+        siteButton.contentTintColor = notSecure ? Theme.danger : Theme.secondaryText
+        siteButton.isEnabled = web
+        siteButton.toolTip = web ? (notSecure ? "Not Secure: View Site Information" : description) : nil
+        siteButton.setAccessibilityLabel(web ? (notSecure ? "Not Secure, View Site Information" : description) : description)
     }
+
+    /// Below this width the capsule shows the warning without its words.
+    private static let chipMinWidth: CGFloat = 420
 }
 
 /// The load tint inside the capsule. Its color is set in `updateLayer`, so it
@@ -277,8 +313,10 @@ private final class CapsuleContentView: NSView {
     }
 }
 
-/// The address field. At rest it shows the whole URL with everything but the
-/// site dimmed; a click selects it all, so typing replaces it.
+/// The address field. At rest it shows the URL with everything but the site
+/// dimmed and, unless `showsFullURL`, without `https://`, `www.` and a lone
+/// trailing slash, as Chrome does. Editing shows all of it. A click selects
+/// it all, so typing replaces it; a drag selects part of it.
 final class AddressField: NSTextField {
     var url = "" {
         // Tabs report the same URL with every title or loading change, and
@@ -287,8 +325,18 @@ final class AddressField: NSTextField {
         didSet { if url != oldValue, !isEditing { showURL() } }
     }
 
+    var showsFullURL = false {
+        didSet { if showsFullURL != oldValue, !isEditing { showURL() } }
+    }
+
     /// Called with true when typing starts and false when it ends.
     var onEditingChanged: ((Bool) -> Void)?
+    /// Called when a click puts the field in editing, after it is selected.
+    var onClickFocus: (() -> Void)?
+    /// Paste and Go: called with what was on the clipboard.
+    var onPasteAndGo: ((String) -> Void)?
+    /// Always Show Full URLs was chosen from the menu.
+    var onToggleFullURLs: (() -> Void)?
 
     var isEditing: Bool { currentEditor() != nil }
 
@@ -303,18 +351,26 @@ final class AddressField: NSTextField {
         return true
     }
 
-    /// The first click selects the whole URL, as in Safari. Left to the
-    /// field editor, it would put the caret where the click landed.
+    /// The first click selects the whole URL, as in Chrome and Safari, but
+    /// a drag from it selects what it covers. Left to the field editor, a
+    /// click would put the caret where it landed.
     override func mouseDown(with event: NSEvent) {
         guard isEditing else {
             window?.makeFirstResponder(self)
+            guard let editor = currentEditor() else { return }
+            // Tracks the mouse until it goes up, selecting what a drag covers.
+            editor.mouseDown(with: event)
+            if editor.selectedRange.length == 0 { editor.selectAll(nil) }
             // Becoming first responder on a click can hand the click to the
-            // field editor, which puts the caret where it landed, so select
-            // now and again once that has settled.
-            currentEditor()?.selectAll(nil)
+            // field editor again once things settle, which would put the
+            // caret where it landed.
             DispatchQueue.main.async { [weak self] in
-                MainActor.assumeIsolated { self?.currentEditor()?.selectAll(nil) }
+                MainActor.assumeIsolated {
+                    guard let editor = self?.currentEditor(), editor.selectedRange.length == 0 else { return }
+                    editor.selectAll(nil)
+                }
             }
+            onClickFocus?()
             return
         }
         super.mouseDown(with: event)
@@ -339,18 +395,46 @@ final class AddressField: NSTextField {
         currentEditor()?.selectAll(nil)
     }
 
+    /// While editing, shows `typed` followed by `completion`, which is
+    /// selected, so typing on replaces it and Delete takes it away.
+    func show(typed: String, completion: String) {
+        guard let editor = currentEditor() as? NSTextView else { return }
+        editor.string = typed + completion
+        editor.setSelectedRange(NSRange(location: typed.utf16.count, length: completion.utf16.count))
+    }
+
+    /// While editing, shows `text` with the caret at its end, as when Up and
+    /// Down put a suggestion in the field.
+    func show(text: String) {
+        guard let editor = currentEditor() as? NSTextView else { return }
+        editor.string = text
+        editor.setSelectedRange(NSRange(location: text.utf16.count, length: 0))
+    }
+
     private func showURL() {
         let shown = url == "about:blank" ? "" : url
+        let (text, site) = Self.display(shown, full: showsFullURL)
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
-        let text = NSMutableAttributedString(string: shown, attributes: [
+        let attributed = NSMutableAttributedString(string: text, attributes: [
             .font: font ?? .systemFont(ofSize: Theme.FontSize.body),
             .foregroundColor: Theme.secondaryText,
             .paragraphStyle: paragraph,
         ])
-        text.addAttribute(.foregroundColor, value: Theme.text, range: Self.siteRange(in: shown))
-        attributedStringValue = text
+        attributed.addAttribute(.foregroundColor, value: Theme.text, range: site)
+        attributedStringValue = attributed
         toolTip = shown.isEmpty ? nil : shown
+    }
+
+    /// What the field shows at rest for `url`, and the range of its site in
+    /// that. Unless `full`, a web page's address leaves out its scheme, a
+    /// leading "www." and a trailing slash with nothing after it.
+    static func display(_ url: String, full: Bool) -> (text: String, site: NSRange) {
+        guard !full, url.hasPrefix("https://") || url.hasPrefix("http://") else { return (url, siteRange(in: url)) }
+        var text = HistoryStore.bare(url)
+        if text.hasSuffix("/"), text.firstIndex(of: "/") == text.index(before: text.endIndex) { text.removeLast() }
+        let end = text.firstIndex { "/?#".contains($0) } ?? text.endIndex
+        return (text, NSRange(text.startIndex..<end, in: text))
     }
 
     /// The host and port of a URL with `://`, else all of it.
@@ -359,6 +443,67 @@ final class AddressField: NSTextField {
         guard let scheme = url.range(of: "://") else { return whole }
         let end = url[scheme.upperBound...].firstIndex { "/?#".contains($0) } ?? url.endIndex
         return NSRange(scheme.upperBound..<end, in: url)
+    }
+
+    // MARK: Menu
+
+    /// The field editor's menu while editing, with Paste and Go after Paste
+    /// and the full URLs choice at the end. The field is its delegate.
+    @objc(textView:menu:forEvent:atIndex:)
+    func textView(_ textView: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
+        let paste = menu.items.firstIndex { $0.action == #selector(NSText.paste(_:)) }
+        menu.insertItem(pasteAndGoItem(), at: paste.map { $0 + 1 } ?? menu.items.count)
+        menu.addItem(.separator())
+        menu.addItem(fullURLsItem())
+        return menu
+    }
+
+    /// At rest, a right-click gets Copy, Paste and Go and the full URLs choice.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard !isEditing else { return super.menu(for: event) }
+        let menu = NSMenu()
+        let copy = NSMenuItem(title: "Copy", action: #selector(copyURL(_:)), keyEquivalent: "")
+        copy.target = self
+        copy.isEnabled = !url.isEmpty && url != "about:blank"
+        menu.autoenablesItems = false
+        menu.addItem(copy)
+        menu.addItem(pasteAndGoItem())
+        menu.addItem(.separator())
+        menu.addItem(fullURLsItem())
+        return menu
+    }
+
+    private func pasteAndGoItem() -> NSMenuItem {
+        // Only the clipboard's types are checked here: reading what is on
+        // it would ask for permission on every right-click.
+        let item = NSMenuItem(title: "Paste and Go", action: #selector(pasteAndGo(_:)), keyEquivalent: "")
+        item.target = self
+        item.isEnabled = NSPasteboard.general.availableType(from: [.string, .URL]) != nil
+        return item
+    }
+
+    private func fullURLsItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Always Show Full URLs", action: #selector(toggleFullURLs(_:)), keyEquivalent: "")
+        item.target = self
+        item.state = showsFullURL ? .on : .off
+        return item
+    }
+
+    @objc private func copyURL(_ sender: Any?) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url, forType: .string)
+    }
+
+    @objc private func pasteAndGo(_ sender: Any?) {
+        let pasteboard = NSPasteboard.general
+        let text = (pasteboard.string(forType: .string) ?? pasteboard.string(forType: .URL) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        onPasteAndGo?(text)
+    }
+
+    @objc private func toggleFullURLs(_ sender: Any?) {
+        onToggleFullURLs?()
     }
 }
 
