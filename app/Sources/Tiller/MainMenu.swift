@@ -294,9 +294,9 @@ private final class HistoryMenuDelegate: NSObject, NSMenuDelegate {
     }
 }
 
-/// Fills the Profiles menu each time it opens: every profile, the front
-/// window's checked and the other open ones marked, then New Profile and
-/// Manage Profiles.
+/// Fills the Profiles menu each time it opens: every profile with its
+/// avatar, the front window's checked and the other open ones marked, then
+/// New Profile and Manage Profiles.
 @MainActor
 private final class ProfilesMenuDelegate: NSObject, NSMenuDelegate {
     /// No item has a shortcut, which spares reading the profiles from disk
@@ -311,9 +311,12 @@ private final class ProfilesMenuDelegate: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let active = ProfileContext.active?.id
-        for profile in Profiles.all {
+        let profiles = Profiles.all
+        let avatars = ProfileAvatar.images(for: profiles)
+        for profile in profiles {
             let item = NSMenuItem(title: profile.name, action: #selector(AppDelegate.openProfile(_:)), keyEquivalent: "")
             item.representedObject = profile.id
+            item.image = avatars[profile.id]
             item.state = profile.id == active ? .on : ProfileContext.opened(profile.id) != nil ? .mixed : .off
             menu.addItem(item)
         }

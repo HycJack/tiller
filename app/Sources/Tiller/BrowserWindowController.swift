@@ -1633,11 +1633,14 @@ final class BrowserWindowController: NSResponder, NSToolbarDelegate,
         reloadItem?.label = label
     }
 
-    /// Shows the profile's name in the toolbar and window title, or hides it
-    /// when `name` is nil.
+    /// Shows the profile's avatar and name in the toolbar and its name in
+    /// the window title, or hides them when `name` is nil.
     func showProfile(name: String?) {
         profileName = name
         profileButton.title = name ?? ""
+        if name != nil, let avatar = ProfileAvatar.images(for: Profiles.all)[profile.id] {
+            profileButton.image = avatar
+        }
         profileButtonWidth = nil
         updateProfileButton()
         updateWindowTitle()

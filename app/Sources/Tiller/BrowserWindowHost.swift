@@ -240,19 +240,40 @@ final class BrowserWindowHost: NSWindowController, NSWindowDelegate {
 
     // MARK: Rail
 
+    /// The profiles whose agent was working at the last update, and those
+    /// whose agent finished out of sight, which the rail marks until they
+    /// show.
+    private var busyIDs: Set<String> = []
+    private var finishedIDs: Set<String> = []
+
     /// Shows the rail while the window has it and no page has the screen,
     /// and fills it with the open profiles.
     func updateRail() {
         let visible = hasRail && shown?.hasFullscreenPage != true
         rail.isHidden = !visible
         railWidth.constant = visible ? ProfileRailView.width : 0
+        for browser in browsers {
+            let id = browser.profile.id
+            let busy = browser.isAgentBusy
+            if browser === shown {
+                finishedIDs.remove(id)
+            } else if busyIDs.contains(id), !busy {
+                finishedIDs.insert(id)
+            }
+            if busy { busyIDs.insert(id) } else { busyIDs.remove(id) }
+        }
+        let open = Set(browsers.map(\.profile.id))
+        finishedIDs.formIntersection(open)
         guard hasRail else { return }
         let names = browsers.map(\.profile.name)
         let initials = ProfileRailView.initials(for: names)
+        let colors = ProfileColor.of(Profiles.all)
         rail.items = browsers.enumerated().map { index, browser in
-            ProfileRailView.Item(
-                id: browser.profile.id, name: names[index], initials: initials[index],
-                shown: browser === shown, busy: browser !== shown && browser.isAgentBusy
+            let id = browser.profile.id
+            return ProfileRailView.Item(
+                id: id, name: names[index], initials: initials[index], color: colors[id] ?? .blue,
+                shown: browser === shown, busy: browser !== shown && browser.isAgentBusy,
+                finished: finishedIDs.contains(id)
             )
         }
     }
@@ -267,6 +288,9 @@ final class BrowserWindowHost: NSWindowController, NSWindowDelegate {
                 try Profiles.rename(profile.id, to: name)
             }
         })
+        let colorItem = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")
+        colorItem.submenu = Self.colorMenu(for: profile.id)
+        menu.addItem(colorItem)
         menu.addItem(.separator())
         menu.addItem(MenuActionItem(title: "Close Profile") { browser.closeAllTabs() })
         let others = MenuActionItem(title: "Close Other Profiles") { [weak self] in
@@ -277,11 +301,42 @@ final class BrowserWindowHost: NSWindowController, NSWindowDelegate {
         return menu
     }
 
+    /// Automatic, then a swatch for each color, the profile's checked.
+    private static func colorMenu(for id: String) -> NSMenu {
+        let menu = NSMenu()
+        let chosen = Profiles.profile(id)?.color.flatMap(ProfileColor.init)
+        let automatic = MenuActionItem(title: "Automatic") { Profiles.setColor(id, to: nil) }
+        automatic.state = chosen == nil ? .on : .off
+        menu.addItem(automatic)
+        menu.addItem(.separator())
+        for color in ProfileColor.allCases {
+            let item = MenuActionItem(title: color.title) { Profiles.setColor(id, to: color) }
+            item.image = swatch(color)
+            item.state = chosen == color ? .on : .off
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    private static func swatch(_ color: ProfileColor) -> NSImage {
+        let image = NSImage(size: NSSize(width: 12, height: 12), flipped: false) { rect in
+            color.color.setFill()
+            NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5)).fill()
+            return true
+        }
+        image.accessibilityDescription = color.title
+        return image
+    }
+
     /// The rail's plus button: the profiles that aren't open, and a new one.
     private static func addMenu() -> NSMenu {
         let menu = NSMenu()
-        for profile in Profiles.all where ProfileContext.opened(profile.id) == nil {
-            menu.addItem(MenuActionItem(title: profile.name) { ProfileContext.open(profile.id) })
+        let profiles = Profiles.all
+        let avatars = ProfileAvatar.images(for: profiles)
+        for profile in profiles where ProfileContext.opened(profile.id) == nil {
+            let item = MenuActionItem(title: profile.name) { ProfileContext.open(profile.id) }
+            item.image = avatars[profile.id]
+            menu.addItem(item)
         }
         if !menu.items.isEmpty { menu.addItem(.separator()) }
         menu.addItem(withTitle: "New Profile…", action: #selector(AppDelegate.newProfile(_:)), keyEquivalent: "")

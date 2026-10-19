@@ -9,6 +9,9 @@ struct Profile: Codable, Equatable, Sendable {
     let id: String
     var name: String
     var created: Date
+    /// The `ProfileColor` its square and avatar show in, when one was
+    /// picked; else one from its place among the profiles.
+    var color: String? = nil
 }
 
 enum ProfileError: LocalizedError {
@@ -160,6 +163,16 @@ enum Profiles {
             let name = try validName(name, for: id, in: list)
             guard let index = list.profiles.firstIndex(where: { $0.id == id }) else { return }
             list.profiles[index].name = name
+        }
+        NotificationCenter.default.post(name: .profilesDidChange, object: nil)
+    }
+
+    /// Gives the profile's square and avatar `color`, or back the one from
+    /// its place among the profiles for nil.
+    static func setColor(_ id: String, to color: ProfileColor?) {
+        update { list in
+            guard let index = list.profiles.firstIndex(where: { $0.id == id }) else { return }
+            list.profiles[index].color = color?.rawValue
         }
         NotificationCenter.default.post(name: .profilesDidChange, object: nil)
     }
