@@ -271,6 +271,17 @@ enum Settings {
         return true
     }
 
+    /// Every open profile in one window, with a rail on its left to switch
+    /// between them, rather than a window each.
+    static var profileTabs: Bool {
+        get { defaults.bool(forKey: "profileTabs") }
+        set {
+            guard newValue != profileTabs else { return }
+            defaults.set(newValue, forKey: "profileTabs")
+            NotificationCenter.default.post(name: .profileTabsDidChange, object: nil)
+        }
+    }
+
     static let defaultAgentTabs = 3
     static let agentTabsRange = 1...9
 
@@ -519,6 +530,8 @@ extension Notification.Name {
     static let agentTabsDidChange = Notification.Name("TillerAgentTabsDidChange")
     /// Posted when a profile's `showsFullURLs` changes.
     static let addressDisplayDidChange = Notification.Name("TillerAddressDisplayDidChange")
+    /// Posted when `Settings.profileTabs` changes.
+    static let profileTabsDidChange = Notification.Name("TillerProfileTabsDidChange")
     /// Posted when a profile's `tabLayout` changes.
     static let tabLayoutDidChange = Notification.Name("TillerTabLayoutDidChange")
     /// Posted when `Settings.appearance`, `Settings.theme` or `Settings.accentTheme` changes.

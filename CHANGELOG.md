@@ -22,6 +22,16 @@ beta shows what `## Unreleased` holds at the time.
   menu has Paste and Go, and a drag in the bar selects part of the address.
 - On the start page, a recently closed tab with a long address shows its
   title again; the address is cut short instead of the title.
+- Profile Tabs: View > Profile Tabs, or Settings > Profiles, puts every
+  open profile in one window, with a rail on its left to switch between
+  them. Each square shows two letters of the profile's name, the `+` opens
+  another profile, a drag reorders them and right-click renames or closes
+  one. Each profile keeps its own toolbar, tabs and agent panel, and one out
+  of sight keeps running, with a dot while its agent works. Closing the
+  window closes every profile, and they all open again at the next launch.
+  Turning it on gathers the windows into one, and off parts them again.
+- Window > Show Next Profile (Ctrl+Cmd+]) and Show Previous Profile
+  (Ctrl+Cmd+[), and Ctrl+Cmd+1 to Ctrl+Cmd+9, go to another open profile.
 
 ## 0.3.2
 

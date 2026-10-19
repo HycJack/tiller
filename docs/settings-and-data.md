@@ -4,7 +4,7 @@ Tiller's settings, the switches it passes to Chromium, and where it stores data.
 
 ## Settings
 
-Tiller > Settings… (Cmd+,) opens the Settings of the front window's profile. It has ten panes: General, Passwords, Sites (see [Camera and microphone](browser.md#camera-and-microphone)), Extensions (see [Extensions](browser.md#extensions)), Agent, Providers (see [Custom providers](agent.md#custom-providers)), Jev (see [run_task](tools.md#run_task)), Skills (see [Skills](agent.md#tillers-skill-library)), Scheduled (see [Scheduled prompts](agent.md#scheduled-prompts)) and Profiles (see [Profiles](browser.md#profiles)). Changes are saved as you make them, and apply to that profile only, except the default browser, which macOS keeps for the app, and the theme, appearance, accent color, agent shortcut, updates, extensions and remote debugging, which every profile shares.
+Tiller > Settings… (Cmd+,) opens the Settings of the front window's profile. It has ten panes: General, Passwords, Sites (see [Camera and microphone](browser.md#camera-and-microphone)), Extensions (see [Extensions](browser.md#extensions)), Agent, Providers (see [Custom providers](agent.md#custom-providers)), Jev (see [run_task](tools.md#run_task)), Skills (see [Skills](agent.md#tillers-skill-library)), Scheduled (see [Scheduled prompts](agent.md#scheduled-prompts)) and Profiles (see [Profiles](browser.md#profiles)). Changes are saved as you make them, and apply to that profile only, except the default browser, which macOS keeps for the app, and the theme, appearance, accent color, agent shortcut, updates, extensions, remote debugging and Profile Tabs, which every profile shares.
 
 | Pane | Setting | Default | Takes effect |
 |---|---|---|---|
@@ -31,8 +31,9 @@ Tiller > Settings… (Cmd+,) opens the Settings of the front window's profile. I
 | Sites | Each site's camera and microphone choice: Ask, Allow or Block, or the site removed | none | the site's next request |
 | Skills | Each skill in the library: on or off, added from a folder, archive or Git, or removed | none | a chat's next agent start |
 | Scheduled | Each scheduled prompt: on or off, its name, agent, tools, rule and prompt, added, edited, run now or removed | none | right away |
+| Profiles | Show every open profile in one window, with a rail to switch between them, stored as `profileTabs` (see [Profile Tabs](browser.md#profile-tabs)). Also View > Profile Tabs | off | right away, for every profile |
 
-Settings live in the profile's own user defaults, `dev.sorrycc.tiller.profile.<id>`. The shared ones, and window positions and sizes, stay in `dev.sorrycc.tiller`; each profile's window keeps its own place. Agents opening tabs with `new_tab` always get a blank page when they pass no URL, whatever the new tab setting says.
+Settings live in the profile's own user defaults, `dev.sorrycc.tiller.profile.<id>`. The shared ones, and window positions and sizes, stay in `dev.sorrycc.tiller`; each profile's window keeps its own place, and the window with Profile Tabs one of its own. Agents opening tabs with `new_tab` always get a blank page when they pass no URL, whatever the new tab setting says.
 
 ## Chromium switches
 

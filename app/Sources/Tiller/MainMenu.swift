@@ -84,6 +84,7 @@ enum MainMenu {
         view.addItem(withTitle: "Show Tab Sidebar", action: #selector(BrowserWindowController.toggleTabSidebar(_:)), keyEquivalent: "L")
         let collapse = view.addItem(withTitle: "Collapse Tab Sidebar", action: #selector(BrowserWindowController.toggleSidebarCollapsed(_:)), keyEquivalent: "s")
         collapse.keyEquivalentModifierMask = [.command, .control]
+        view.addItem(withTitle: "Profile Tabs", action: #selector(AppDelegate.toggleProfileTabs(_:)), keyEquivalent: "")
         view.addItem(.separator())
         let source = view.addItem(withTitle: "View Page Source", action: #selector(BrowserWindowController.viewPageSource(_:)), keyEquivalent: "u")
         source.keyEquivalentModifierMask = [.command, .option]
@@ -122,6 +123,16 @@ enum MainMenu {
         hidden(window, "Show Previous Tab", #selector(BrowserWindowController.selectPreviousTab(_:)), arrowKey(NSLeftArrowFunctionKey), [.command, .option])
         for number in 1...9 {
             let item = hidden(window, "Select Tab \(number)", #selector(BrowserWindowController.selectTabByNumber(_:)), "\(number)", [.command])
+            item.tag = number
+        }
+        window.addItem(.separator())
+        let previousProfile = window.addItem(withTitle: "Show Previous Profile", action: #selector(AppDelegate.showPreviousProfile(_:)), keyEquivalent: "[")
+        previousProfile.keyEquivalentModifierMask = [.control, .command]
+        let nextProfile = window.addItem(withTitle: "Show Next Profile", action: #selector(AppDelegate.showNextProfile(_:)), keyEquivalent: "]")
+        nextProfile.keyEquivalentModifierMask = [.control, .command]
+        // Ctrl+Cmd+1 to Ctrl+Cmd+9 work but stay out of sight.
+        for number in 1...9 {
+            let item = hidden(window, "Show Profile \(number)", #selector(AppDelegate.showProfileByNumber(_:)), "\(number)", [.control, .command])
             item.tag = number
         }
         window.addItem(.separator())

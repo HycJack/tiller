@@ -170,7 +170,7 @@ The chrome follows the system's accessibility settings. VoiceOver reads tabs, th
 
 ## Profiles
 
-A profile has its own cookies and site data, history, open tabs, saved passwords, settings and agent chats. One Tiller runs every open profile, each in a window of its own, under one Dock icon.
+A profile has its own cookies and site data, history, open tabs, saved passwords, settings and agent chats. One Tiller runs every open profile, each in a window of its own, or with [Profile Tabs](#profile-tabs) all in one, under one Dock icon.
 
 - Extensions, the theme, the appearance, the accent color and the agent panel's shortcut are shared by every profile.
 - The Profiles menu lists them, with a check on the front window's profile and a dash on the other open ones. Choosing one brings its window forward, or opens it. New Profile… asks for a name and opens it.
@@ -181,3 +181,17 @@ A profile has its own cookies and site data, history, open tabs, saved passwords
 - A profile can only be open once. An older Tiller, which ran a process per profile, can't open a profile this one has open, nor the other way round.
 - Links and HTML files from other apps open in the profile used last, which opens if it was closed.
 - Names must differ, since [`tiller --profile`](tools.md#command-line-tool) picks a profile by name.
+- Window > Show Next Profile (Ctrl+Cmd+]) and Show Previous Profile (Ctrl+Cmd+[) go through the open profiles, and Ctrl+Cmd+1 to Ctrl+Cmd+9 show one by its place, in the Profiles menu's order or along the rail.
+
+### Profile Tabs
+
+View > Profile Tabs, or Settings > Profiles > Show every open profile in one window, keeps every open profile in one window instead, so you don't switch windows to change profiles.
+
+- A rail at the left of the window has a square for each open profile, with two letters of its name, and a pill along the rail's edge marks the one shown. Names that would share their letters are told apart by the first letter that differs: Downloads and Documents show as "Dw" and "Dc". The tip gives the profile's name and the keys that show it.
+- Clicking a square shows that profile, with its own toolbar, tabs, address bar, sidebar and agent panel as it left them; tabs along the top or in a sidebar are still the profile's own choice. The toolbar leaves out the profile's name, which the rail shows, and the window title keeps it.
+- The `+` after the squares lists the profiles that aren't open, to open one there, and New Profile…. Opening a profile from the Profiles menu, Settings, a link or `tiller` adds it to the rail, or shows it if it is there already.
+- Drag a square along the rail to reorder the profiles; the next launch keeps the order. A square's right-click menu renames the profile and closes it or the others.
+- A profile out of sight keeps running: its agents and scheduled prompts work, a dot on its square shows while its agent is busy, and `tiller` and `tiller_mcp` drive its tabs, waking one as they do in a background tab, without bringing the profile forward. Clicking a scheduled run's notification shows its profile.
+- Closing a profile's last tab, or Close Profile, closes the profile and takes it off the rail. Closing the window closes every profile in it, and they all open again at the next launch, with the one used last in front.
+- While a page has the whole screen, the rail hides and the profile shown can't change.
+- Turning Profile Tabs on gathers the open windows into the one in front, and turning it off parts the profiles into a window each again, with no restart.

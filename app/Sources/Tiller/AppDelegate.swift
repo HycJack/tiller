@@ -34,7 +34,7 @@ enum Launch {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// One Settings window per profile, by profile id.
     private var settingsControllers: [String: SettingsWindowController] = [:]
     /// Links that arrived before launch finished.
@@ -89,6 +89,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ProfileContext.open(id)
     }
 
+    /// View > Profile Tabs: every profile in one window, or a window each.
+    @objc func toggleProfileTabs(_ sender: Any?) {
+        Settings.profileTabs.toggle()
+    }
+
+    @objc func showNextProfile(_ sender: Any?) { showProfile(offset: 1) }
+    @objc func showPreviousProfile(_ sender: Any?) { showProfile(offset: -1) }
+
+    /// Ctrl+Cmd+1 to Ctrl+Cmd+9 show the open profile at that place, on the
+    /// rail or in the Profiles menu's order. The number is the item's tag.
+    @objc func showProfileByNumber(_ sender: Any?) {
+        guard let number = (sender as? NSMenuItem)?.tag else { return }
+        let open = ProfileContext.all
+        if open.indices.contains(number - 1) { open[number - 1].show() }
+    }
+
+    private func showProfile(offset: Int) {
+        let open = ProfileContext.all
+        guard open.count > 1, let active = ProfileContext.active,
+            let index = open.firstIndex(where: { $0 === active })
+        else { return }
+        open[(index + offset + open.count) % open.count].show()
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(toggleProfileTabs(_:)):
+            item.state = Settings.profileTabs ? .on : .off
+            return true
+        case #selector(showNextProfile(_:)), #selector(showPreviousProfile(_:)):
+            return ProfileContext.all.count > 1
+        case #selector(showProfileByNumber(_:)):
+            return ProfileContext.all.count >= item.tag
+        default:
+            return true
+        }
+    }
+
     @objc func newProfile(_ sender: Any?) {
         ProfileNamePrompt.run("New Profile", button: "Create", on: nil) { name in
             ProfileContext.open(try Profiles.create(named: name).id)
@@ -109,9 +147,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Opens `url` in a new tab of `profile`'s window, or of the window in
-    /// front, for Settings and links in the agent panel.
+    /// front, for Settings and links in the agent panel. A tab in front shows
+    /// the profile, in a window with Profile Tabs too.
     func openInNewTab(_ url: String, background: Bool = false, profile: ProfileContext? = nil) {
-        (profile ?? ProfileContext.active)?.window?.openInNewTab(url, background: background)
+        guard let profile = profile ?? ProfileContext.active else { return }
+        if background {
+            profile.window?.openInNewTab(url, background: true)
+        } else {
+            profile.show(urls: [url])
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -125,6 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         center.addObserver(self, selector: #selector(themeChanged(_:)), name: .themeDidChange, object: nil)
         center.addObserver(self, selector: #selector(profilesChanged(_:)), name: .profilesDidChange, object: nil)
         center.addObserver(self, selector: #selector(profileOpened(_:)), name: .profileDidOpen, object: nil)
+        center.addObserver(self, selector: #selector(profileTabsChanged(_:)), name: .profileTabsDidChange, object: nil)
 
         tiller_core_set_quit_handler {
             MainActor.assumeIsolated { (NSApp.delegate as? AppDelegate)?.quitRequested() }
@@ -138,8 +183,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         launched = true
         var profiles = Launch.profiles
         if !urls.isEmpty && !profiles.contains(linkProfile) { profiles.append(linkProfile) }
+        // With Profile Tabs, the window shows the profile the links open in,
+        // else the one used last.
+        let front = urls.isEmpty && profiles.contains(Profiles.lastUsed.id) ? Profiles.lastUsed.id : linkProfile
         for id in profiles {
-            ProfileContext.open(id, urls: id == linkProfile ? urls : [])
+            ProfileContext.open(id, urls: id == linkProfile ? urls : [], reveal: id == front || profiles.count == 1)
         }
         DownloadStore.shared.start()
         Updater.shared.start()
@@ -160,10 +208,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated {
                 // The default browser question waits for a launch without
                 // this notice.
+                let window = profile?.window?.host?.window
                 if ExtensionStore.shared.skippedAfterCrash {
-                    self?.explainSkippedExtensions(on: profile?.window?.window)
+                    self?.explainSkippedExtensions(on: window)
                 } else {
-                    DefaultBrowser.askOnce(on: profile?.window?.window)
+                    DefaultBrowser.askOnce(on: window)
                 }
             }
         }
@@ -256,18 +305,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Profiles were added, renamed, removed, opened or closed. With more
-    /// than one, each window names its profile in the toolbar and title.
+    /// than one, each window names its profile in the toolbar and title, or
+    /// on the rail with Profile Tabs.
     @objc private func profilesChanged(_ notification: Notification) {
         let several = Profiles.all.count > 1
         for profile in ProfileContext.all {
             profile.window?.showProfile(name: several ? profile.name : nil)
             settingsControllers[profile.id]?.showProfile(name: several ? profile.name : nil)
         }
+        BrowserWindowHost.all.forEach { $0.updateRail() }
         settingsControllers = settingsControllers.filter { id, controller in
             if ProfileContext.opened(id) != nil { return true }
             controller.close()
             return false
         }
+    }
+
+    /// Gathers the windows into one, or parts them, at once.
+    @objc private func profileTabsChanged(_ notification: Notification) {
+        BrowserWindowHost.applyProfileTabs()
     }
 
     /// Cmd+Q, the Dock or logging out. Closes every tab of every profile,

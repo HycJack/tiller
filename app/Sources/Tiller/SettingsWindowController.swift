@@ -2072,6 +2072,10 @@ final class ProfilesSettingsPane: NSViewController, NSTableViewDataSource, NSTab
     private let addButton = NSButton(title: "New Profile…", target: nil, action: nil)
     private let renameButton = NSButton(title: "Rename…", target: nil, action: nil)
     private let deleteButton = NSButton(title: "Delete…", target: nil, action: nil)
+    private lazy var oneWindow = NSButton(
+        checkboxWithTitle: "Show every open profile in one window, with a rail to switch between them",
+        target: self, action: #selector(oneWindowChanged(_:))
+    )
     private let note = SettingsPane.wrappingNote(width: SettingsPane.tableWidth)
     private var profiles: [Profile] = []
     /// The profile whose Settings these are.
@@ -2114,10 +2118,11 @@ final class ProfilesSettingsPane: NSViewController, NSTableViewDataSource, NSTab
         let buttons = NSStackView(views: [openButton, addButton, renameButton, NSView(), deleteButton])
         buttons.spacing = 8
 
-        let stack = NSStackView(views: [scroll, buttons, note])
+        let stack = NSStackView(views: [scroll, buttons, note, oneWindow])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
+        stack.setCustomSpacing(16, after: note)
         stack.translatesAutoresizingMaskIntoConstraints = false
         let view = NSView()
         view.addSubview(stack)
@@ -2134,7 +2139,12 @@ final class ProfilesSettingsPane: NSViewController, NSTableViewDataSource, NSTab
         view.layoutSubtreeIfNeeded()
         preferredContentSize = view.fittingSize
         NotificationCenter.default.addObserver(self, selector: #selector(reload(_:)), name: .profilesDidChange, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(reload(_:)), name: .profileTabsDidChange, object: nil)
         reload(nil)
+    }
+
+    @objc private func oneWindowChanged(_ sender: NSButton) {
+        Settings.profileTabs = sender.state == .on
     }
 
     override func viewWillAppear() {
@@ -2161,9 +2171,11 @@ final class ProfilesSettingsPane: NSViewController, NSTableViewDataSource, NSTab
         openButton.isEnabled = selected != nil
         renameButton.isEnabled = selected != nil
         deleteButton.isEnabled = selected.map { ProfileContext.opened($0.id) == nil } ?? false
+        oneWindow.state = Settings.profileTabs ? .on : .off
         SettingsPane.show(
             "Each profile keeps its own cookies, history, tabs, passwords, settings and chats, "
-                + "and opens in a window of its own. An open profile can't be deleted.",
+                + "and opens in a window of its own, or with the option below, in a tab on the window's rail. "
+                + "An open profile can't be deleted.",
             in: note
         )
     }

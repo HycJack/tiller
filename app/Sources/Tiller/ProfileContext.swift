@@ -2,12 +2,14 @@ import AppKit
 import CTillerCore
 
 /// An open profile: its stores, its Chromium request context, its control
-/// socket, its scheduled prompts and its window. One Tiller process runs
-/// every open profile, each in a window of its own, under one Dock icon.
-/// A profile opens with `open(_:urls:)` and closes with its window.
+/// socket, its scheduled prompts and its browser. One Tiller process runs
+/// every open profile, each in a window of its own, or with Profile Tabs all
+/// in one, under one Dock icon. A profile opens with `open(_:urls:)` and
+/// closes with its browser's last tab.
 @MainActor
 final class ProfileContext {
-    /// The open profiles, in the order they opened.
+    /// The open profiles, in the order they opened, or as they were dragged
+    /// along the rail.
     private(set) static var all: [ProfileContext] = []
 
     /// Set from a quit until Tiller exits, so the profiles closing with it
@@ -20,7 +22,8 @@ final class ProfileContext {
 
     /// The profile whose browser or Settings window is in front, else the
     /// one used last that is open, else any open one. For menus and links
-    /// that aren't about a particular window.
+    /// that aren't about a particular window. In a window with Profile Tabs
+    /// it is the profile shown.
     static var active: ProfileContext? {
         for window in [NSApp.keyWindow, NSApp.mainWindow].compactMap({ $0 }) {
             if let profile = all.first(where: { $0.owns(window) }) { return profile }
@@ -51,11 +54,15 @@ final class ProfileContext {
     /// The Chromium request context this profile's tabs run in, or -1 until
     /// it is created.
     private(set) var context: Int32 = -1
+    /// The profile's browser, once its request context is ready.
     private(set) var window: BrowserWindowController?
     /// Holds the profile's `instance.lock` while it is open.
     private let lock: Int32
     /// Links to open once the window is up.
     private var pendingURLs: [String] = []
+    /// Whether the browser comes to the front of a window with Profile Tabs
+    /// once it is up, rather than behind the one shown.
+    private var reveal = true
 
     var name: String { Profiles.name(of: id) }
 
@@ -78,18 +85,31 @@ final class ProfileContext {
         schedules = AgentScheduleStore(folder: folder)
     }
 
+    /// Whether `window` is this profile's browser window, or a sheet or child
+    /// of it, and the window shows this profile.
     private func owns(_ window: NSWindow) -> Bool {
-        guard let controller = self.window else { return false }
-        return window === controller.window || window.sheetParent === controller.window
-            || controller.ownsChild(window)
+        guard let controller = self.window, controller.isShown, let browserWindow = controller.host?.window else {
+            return false
+        }
+        return window === browserWindow || window.sheetParent === browserWindow || controller.ownsChild(window)
+    }
+
+    /// Puts the profile with `id` at `index`, as dragged along the rail. The
+    /// next launch opens the profiles in this order.
+    static func move(_ id: String, to index: Int) {
+        guard let from = all.firstIndex(where: { $0.id == id }) else { return }
+        all.insert(all.remove(at: from), at: min(max(index, 0), all.count - 1))
+        Profiles.setOpen(all.map(\.id))
     }
 
     // MARK: Opening
 
     /// Brings the profile's window forward with `urls` in new tabs, or opens
     /// the profile: its window gets the tabs of last time, or the homepage,
-    /// then `urls`.
-    static func open(_ id: String, urls: [String] = []) {
+    /// then `urls`. Without `reveal`, a profile opening into the window with
+    /// Profile Tabs stays behind the one shown, as the ones restored at
+    /// launch other than the one used last do.
+    static func open(_ id: String, urls: [String] = [], reveal: Bool = true) {
         if let profile = opened(id) {
             profile.show(urls: urls)
             return
@@ -112,6 +132,7 @@ final class ProfileContext {
         let socket = all.isEmpty ? override : nil
         let profile = ProfileContext(id: id, lock: lock, socketPath: socket ?? Profiles.socketPath(for: id))
         profile.pendingURLs = urls
+        profile.reveal = reveal
         all.append(profile)
         profile.createContext()
         Profiles.setOpen(all.map(\.id))
@@ -142,15 +163,17 @@ final class ProfileContext {
         var urls = pendingURLs
         pendingURLs = []
         if urls.isEmpty && restored.isEmpty { urls = [settings.homepageURL] }
+        let host = BrowserWindowHost.forOpening(self)
         let controller = BrowserWindowController(
-            profile: self, restoring: restored, selected: session.selectedIndex, opening: urls.first
+            profile: self, host: host, show: reveal, restoring: restored, selected: session.selectedIndex,
+            opening: urls.first
         )
         for url in urls.dropFirst() { controller.openInNewTab(url) }
         controller.onClose = { [weak self] in self?.close() }
         window = controller
         controller.showProfile(name: Profiles.all.count > 1 ? name : nil)
-        controller.showWindow(nil)
-        controller.window?.makeKeyAndOrderFront(nil)
+        host.showWindow(nil)
+        host.window?.makeKeyAndOrderFront(nil)
         if !control.start() {
             NSLog("Tiller: control socket for profile %@ unavailable, agent tools will not work", id)
         }
@@ -159,26 +182,33 @@ final class ProfileContext {
         NotificationCenter.default.post(name: .profileDidOpen, object: self)
     }
 
-    /// Brings the window forward and opens `urls` in it.
+    /// Brings the window forward, showing this profile in it, and opens
+    /// `urls` there.
     func show(urls: [String] = []) {
-        guard let window else {
+        guard let window, let host = window.host else {
             pendingURLs += urls
+            reveal = true
             return
         }
+        host.show(window)
         for url in urls { window.openInNewTab(url) }
-        if window.window?.isMiniaturized == true { window.window?.deminiaturize(nil) }
-        window.showWindow(nil)
-        window.window?.makeKeyAndOrderFront(nil)
+        if host.window?.isMiniaturized == true { host.window?.deminiaturize(nil) }
+        host.showWindow(nil)
+        host.window?.makeKeyAndOrderFront(nil)
         NSApp.activate()
     }
 
     // MARK: Closing
 
-    /// Called once the window has closed: the stores write what's pending,
-    /// and the socket, schedules and lock go. Closing the last profile quits
-    /// Tiller, since the core's message loop ends with the last browser.
+    /// Called once the browser's last tab has closed: the stores write what's
+    /// pending, and the socket, schedules and lock go. Closing the last
+    /// profile quits Tiller, since the core's message loop ends with the last
+    /// browser.
     private func close() {
         guard let index = Self.all.firstIndex(where: { $0 === self }) else { return }
+        // Closing the window with Profile Tabs closes every profile, and
+        // they all open at the next launch.
+        let closingWithWindow = window?.host?.isClosingAll == true
         Self.all.remove(at: index)
         window = nil
         session.flush()
@@ -190,7 +220,7 @@ final class ProfileContext {
         Profiles.release(lock)
         // The last profile to close is the one the next launch opens, as
         // are all of them when Tiller quits.
-        if !Self.isQuitting && !Self.all.isEmpty {
+        if !Self.isQuitting && !closingWithWindow && !Self.all.isEmpty {
             Profiles.setOpen(Self.all.map(\.id))
         }
         NotificationCenter.default.post(name: .profilesDidChange, object: nil)
