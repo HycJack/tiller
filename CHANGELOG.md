@@ -7,6 +7,8 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+## 0.4.0
+
 - Tiller now passes as Chrome to sites that check the browser, such as
   sign-in pages that said they couldn't verify it. Its user agent no
   longer adds Tiller's name, and its client hints name Google Chrome as
