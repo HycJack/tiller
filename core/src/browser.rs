@@ -237,6 +237,20 @@ pub fn context(id: i32) -> Option<RequestContext> {
     CONTEXTS.with_borrow(|map| map.get(&id).cloned())
 }
 
+/// The id `create_context` gave the request context `browser` runs in, or 0
+/// for one it didn't make, such as the global context. Of two contexts
+/// sharing storage, which share a profile, the first made stands for both.
+pub fn context_of(browser: &Browser) -> i32 {
+    let Some(mut own) = browser.host().and_then(|h| h.request_context()) else { return 0 };
+    CONTEXTS.with_borrow(|map| {
+        map.iter()
+            .filter(|(_, context)| context.is_sharing_with(Some(&mut own)) != 0)
+            .map(|(id, _)| *id)
+            .min()
+            .unwrap_or(0)
+    })
+}
+
 /// Whether browser `id` runs in request context `context`.
 pub fn in_context(id: i32, context: i32) -> bool {
     BROWSERS.with_borrow(|map| map.get(&id).is_some_and(|e| e.context == context))

@@ -43,6 +43,8 @@ beta shows what `## Unreleased` holds at the time.
   until there are more than eight.
 - Window > Show Next Profile (Ctrl+Cmd+]) and Show Previous Profile
   (Ctrl+Cmd+[), and Ctrl+Cmd+1 to Ctrl+Cmd+9, go to another open profile.
+- The cross beside a download in the Downloads list cancels it again, and
+  downloads from different profiles no longer get mixed up.
 
 ## 0.3.2
 

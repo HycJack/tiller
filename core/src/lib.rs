@@ -131,10 +131,11 @@ pub unsafe extern "C" fn tiller_core_set_download_handler(ctx: *mut c_void, hand
     downloads::set_handler(ctx, handler);
 }
 
-/// Cancels a download still under way. Its callback reports the change.
+/// Cancels a download still under way, by the profile and id it was
+/// reported with. Its callback reports the change.
 #[unsafe(no_mangle)]
-pub extern "C" fn tiller_download_cancel(id: u32) {
-    downloads::cancel(id);
+pub extern "C" fn tiller_download_cancel(context: i32, id: u32) {
+    downloads::cancel(context, id);
 }
 
 /// Creates the request context for a profile, keeping its Chromium data in

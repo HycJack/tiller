@@ -90,17 +90,21 @@ void tiller_core_set_quit_handler(void (*handler)(void));
 void tiller_core_quit(void);
 
 // A download started, moved on or ended. Called on the main thread.
-// `browser_id` is the tab it came from (-1 if unknown), `path` is where the
+// `browser_id` is the tab it came from (-1 if unknown), `context` the id of
+// its profile's request context (0 if unknown), which with `id` names the
+// download, as each profile numbers its own. `path` is where the
 // file is being saved (empty until chosen), `url` is the file's URL and
 // `original_url` the one requested before any redirect, `total` is -1 while
 // the size is unknown, and `state` is 0 while in progress, 1 complete,
 // 2 canceled, 3 failed.
-typedef void (*TillerDownloadCallback)(void *ctx, int browser_id, uint32_t id, const char *path, const char *url,
-                                       const char *original_url, int64_t received, int64_t total, int32_t state);
+typedef void (*TillerDownloadCallback)(void *ctx, int browser_id, int32_t context, uint32_t id, const char *path,
+                                       const char *url, const char *original_url, int64_t received, int64_t total,
+                                       int32_t state);
 // Downloads go to ~/Downloads and are reported through `handler`. NULL clears it.
 void tiller_core_set_download_handler(void *ctx, TillerDownloadCallback handler);
-// Cancels a download still under way. The callback reports the change.
-void tiller_download_cancel(uint32_t id);
+// Cancels a download still under way, named by the `context` and `id` it was
+// reported with. The callback reports the change.
+void tiller_download_cancel(int32_t context, uint32_t id);
 
 // Creates a browser for tab `tab_id` in request context `context`, filling
 // `parent_view` (an NSView *). Returns its id or -1. `cdp` requests on the

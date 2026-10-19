@@ -11,6 +11,9 @@ struct Download: Equatable {
         case failed = 3
     }
 
+    /// The id of its profile's request context, which numbers its downloads
+    /// on its own, so this and `id` name a download together.
+    let context: Int32
     let id: UInt32
     /// The browser id of the tab it came from, or -1.
     let tabID: Int32
@@ -35,6 +38,13 @@ struct Download: Equatable {
     var fraction: Double? {
         total > 0 ? min(1, Double(received) / Double(total)) : nil
     }
+
+    struct Key: Hashable {
+        let context: Int32
+        let id: UInt32
+    }
+
+    var key: Key { Key(context: context, id: id) }
 }
 
 /// The downloads of this run, newest first, from every profile. The core
@@ -52,13 +62,13 @@ final class DownloadStore {
 
     /// Starts taking reports from the core.
     func start() {
-        tiller_core_set_download_handler(nil) { _, tabID, id, path, url, originalURL, received, total, state in
+        tiller_core_set_download_handler(nil) { _, tabID, context, id, path, url, originalURL, received, total, state in
             let path = path.map { String(cString: $0) } ?? ""
             let url = url.map { String(cString: $0) } ?? ""
             let originalURL = originalURL.map { String(cString: $0) } ?? ""
             MainActor.assumeIsolated {
                 DownloadStore.shared.update(
-                    Download(id: id, tabID: tabID, path: path, url: url, originalURL: originalURL, received: received,
+                    Download(context: context, id: id, tabID: tabID, path: path, url: url, originalURL: originalURL, received: received,
                              total: total, state: Download.State(rawValue: state) ?? .failed))
             }
         }
@@ -78,7 +88,7 @@ final class DownloadStore {
 
     private func update(_ download: Download) {
         var download = download
-        if let index = downloads.firstIndex(where: { $0.id == download.id }) {
+        if let index = downloads.firstIndex(where: { $0.key == download.key }) {
             // The path arrives once it is chosen and stays after.
             if download.path.isEmpty { download.path = downloads[index].path }
             guard downloads[index] != download else { return }
@@ -115,8 +125,8 @@ final class DownloadStore {
         }
     }
 
-    func cancel(_ id: UInt32) {
-        tiller_download_cancel(id)
+    func cancel(_ download: Download) {
+        tiller_download_cancel(download.context, download.id)
     }
 
     /// Forgets the downloads that have ended.
@@ -212,7 +222,7 @@ final class DownloadsController: NSViewController {
     private let scroll = NSScrollView()
     private let clearButton = NSButton(title: "Clear", target: nil, action: nil)
     private let emptyLabel = NSTextField(labelWithString: "No Downloads")
-    private var rowViews: [UInt32: DownloadRowView] = [:]
+    private var rowViews: [Download.Key: DownloadRowView] = [:]
     private lazy var scrollHeight = scroll.heightAnchor.constraint(equalToConstant: 0)
     private static let width = Theme.popoverWidth
     /// The list scrolls past this many rows' worth of height.
@@ -279,15 +289,15 @@ final class DownloadsController: NSViewController {
     /// gone ones lose them, and the rest update what they show.
     func reload() {
         let downloads = DownloadStore.shared.downloads
-        var kept: [UInt32: DownloadRowView] = [:]
+        var kept: [Download.Key: DownloadRowView] = [:]
         for (index, download) in downloads.enumerated() {
-            let row = rowViews[download.id] ?? DownloadRowView(download: download)
+            let row = rowViews[download.key] ?? DownloadRowView(download: download)
             row.update(download)
             if rows.arrangedSubviews.count <= index || rows.arrangedSubviews[index] !== row {
                 rows.insertArrangedSubview(row, at: min(index, rows.arrangedSubviews.count))
                 row.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
             }
-            kept[download.id] = row
+            kept[download.key] = row
         }
         for view in rows.arrangedSubviews where !(view is DownloadRowView && kept.values.contains { $0 === view }) {
             view.removeFromSuperview()
@@ -522,7 +532,7 @@ private final class DownloadRowView: NSView {
     }
 
     @objc private func cancel(_ sender: Any?) {
-        DownloadStore.shared.cancel(download.id)
+        DownloadStore.shared.cancel(download)
     }
 
     @objc private func reveal(_ sender: Any?) {
