@@ -40,6 +40,42 @@ struct ProfileColorTests {
     @Test func aPickedColorWins() {
         let colors = ProfileColor.of([profile("a", color: "pink"), profile("b", color: "nonsense")])
         #expect(colors["a"] == .pink)
+        #expect(colors["b"] == .blue)
+    }
+
+    /// A color one profile picked is passed over by those without one, so
+    /// two profiles share a color only once all eight are taken.
+    @Test func automaticColorsPassOverPickedOnes() {
+        let colors = ProfileColor.of([profile("a"), profile("b", color: "orange"), profile("c"), profile("d")])
+        #expect(colors["a"] == .blue)
         #expect(colors["b"] == .orange)
+        #expect(colors["c"] == .green)
+        #expect(colors["d"] == .purple)
+        let all = ProfileColor.of(ProfileColor.allCases.map { profile($0.rawValue, color: $0.rawValue) } + [profile("x")])
+        #expect(all["x"] == .blue)
+    }
+}
+
+@Suite
+@MainActor
+struct ProfileLabelTests {
+    private func profile(_ id: String, _ name: String, label: String? = nil) -> Profile {
+        Profile(id: id, name: name, created: Date(), label: label)
+    }
+
+    /// A label of its own takes the place of the initials, and the initials
+    /// are told apart across every profile, so they match the menus'.
+    @Test func ownLabelReplacesInitials() {
+        let labels = ProfileAvatar.labels(for: [
+            profile("a", "Downloads"), profile("b", "Documents", label: "🦊"), profile("c", "Work"),
+        ])
+        #expect(labels == ["a": "Dw", "b": "🦊", "c": "Wo"])
+    }
+
+    @Test func emojiLabelsAreTold() {
+        #expect(ProfileAvatar.isEmoji("🦊"))
+        #expect(ProfileAvatar.isEmoji("❤️"))
+        #expect(!ProfileAvatar.isEmoji("Wo"))
+        #expect(!ProfileAvatar.isEmoji("工作"))
     }
 }

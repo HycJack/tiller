@@ -75,6 +75,14 @@ final class BrowserWindowHost: NSWindowController, NSWindowDelegate {
         }
         rail.menuFor = { [weak self] id in self?.menu(for: id) }
         rail.addMenu = { Self.addMenu() }
+        rail.onDropURL = { [weak self] id, url in
+            guard let self, let browser = self.browsers.first(where: { $0.profile.id == id }) else { return }
+            browser.openInNewTab(url.absoluteString)
+            self.show(browser)
+        }
+        rail.detailFor = { [weak self] id in
+            self?.browsers.first { $0.profile.id == id }?.summary
+        }
         updateRail()
 
         let name = hasRail ? Self.railFrameName : Self.frameName(for: profile)
@@ -168,9 +176,13 @@ final class BrowserWindowHost: NSWindowController, NSWindowDelegate {
         browser.install(in: window)
         // An agent working in the profile left keeps its page drawing.
         if let old { old.rootView.isHidden = !old.isAwake }
-        if window.isKeyWindow { Profiles.markUsed(browser.profile.id) }
         updateRail()
         browser.didShow()
+        // Written after the switch draws, as it saves profiles.json.
+        if window.isKeyWindow {
+            let id = browser.profile.id
+            DispatchQueue.main.async { Profiles.markUsed(id) }
+        }
     }
 
     /// A browser's last tab closed: the profile closes with it.
@@ -265,13 +277,13 @@ final class BrowserWindowHost: NSWindowController, NSWindowDelegate {
         let open = Set(browsers.map(\.profile.id))
         finishedIDs.formIntersection(open)
         guard hasRail else { return }
-        let names = browsers.map(\.profile.name)
-        let initials = ProfileRailView.initials(for: names)
-        let colors = ProfileColor.of(Profiles.all)
-        rail.items = browsers.enumerated().map { index, browser in
+        let profiles = Profiles.all
+        let labels = ProfileAvatar.labels(for: profiles)
+        let colors = ProfileColor.of(profiles)
+        rail.items = browsers.map { browser in
             let id = browser.profile.id
             return ProfileRailView.Item(
-                id: id, name: names[index], initials: initials[index], color: colors[id] ?? .blue,
+                id: id, name: profiles.first { $0.id == id }?.name ?? id, label: labels[id] ?? "?", color: colors[id] ?? .blue,
                 shown: browser === shown, busy: browser !== shown && browser.isAgentBusy,
                 finished: finishedIDs.contains(id)
             )
@@ -286,6 +298,16 @@ final class BrowserWindowHost: NSWindowController, NSWindowDelegate {
         menu.addItem(MenuActionItem(title: "Rename…") { [weak self] in
             ProfileNamePrompt.run("Rename \(profile.name)", button: "Rename", initial: profile.name, on: self?.window) { name in
                 try Profiles.rename(profile.id, to: name)
+            }
+        })
+        menu.addItem(MenuActionItem(title: "Label…") { [weak self] in
+            ProfileNamePrompt.run(
+                "Label \(profile.name)", button: "Set Label", initial: Profiles.profile(profile.id)?.label ?? "",
+                placeholder: "Initials",
+                note: "One or two characters, an emoji too, shown in place of the profile's initials. Leave it empty for the initials.",
+                on: self?.window
+            ) { label in
+                try Profiles.setLabel(profile.id, to: label)
             }
         })
         let colorItem = NSMenuItem(title: "Color", action: nil, keyEquivalent: "")

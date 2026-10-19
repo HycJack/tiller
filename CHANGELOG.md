@@ -25,17 +25,22 @@ beta shows what `## Unreleased` holds at the time.
 - Profile Tabs: View > Profile Tabs, or Settings > Profiles, puts every
   open profile in one window, with a rail on its left to switch between
   them. Each square shows two letters of the profile's name, tinted in the
-  profile's color, the one shown ringed and marked by a pill along the
-  rail's edge. Its tip gives the name and the keys that show it. The dashed
-  `+` opens another profile, a drag reorders them, right-click renames one,
-  picks its color or closes it, and with many profiles the rail scrolls.
+  profile's color, the one shown ringed and marked by a pill in its color
+  along the rail's edge. Its tip gives the name, the keys that show it,
+  the profile's tab count and the page in front. The dashed `+` opens
+  another profile, a drag reorders them, a link dropped on a square opens
+  in that profile, right-click renames one, picks its color, gives it a
+  label of one or two characters, an emoji too, in place of its initials,
+  or closes it, and with many profiles the rail scrolls.
   Each profile keeps its own toolbar, tabs and agent panel, and one out of
   sight keeps running, with a dot that pulses while its agent works and
   stays once it finishes, until the profile shows. Closing the window
   closes every profile, and they all open again at the next launch.
   Turning it on gathers the windows into one, and off parts them again.
 - Each profile has a color, which shows as its avatar in the Profiles
-  menu and beside its name in the toolbar.
+  menu and beside its name in the toolbar. Profiles without a color of
+  their own pass over the colors others picked, so two don't share one
+  until there are more than eight.
 - Window > Show Next Profile (Ctrl+Cmd+]) and Show Previous Profile
   (Ctrl+Cmd+[), and Ctrl+Cmd+1 to Ctrl+Cmd+9, go to another open profile.
 

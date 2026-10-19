@@ -12,6 +12,9 @@ struct Profile: Codable, Equatable, Sendable {
     /// The `ProfileColor` its square and avatar show in, when one was
     /// picked; else one from its place among the profiles.
     var color: String? = nil
+    /// Up to two characters of its own, an emoji too, its square and avatar
+    /// show in place of its initials.
+    var label: String? = nil
 }
 
 enum ProfileError: LocalizedError {
@@ -19,6 +22,7 @@ enum ProfileError: LocalizedError {
     case duplicateName(String)
     case open(String)
     case running(String)
+    case longLabel
 
     var errorDescription: String? {
         switch self {
@@ -26,6 +30,7 @@ enum ProfileError: LocalizedError {
         case .duplicateName(let name): "There is already a profile called \(name)."
         case .open(let name): "\(name) is open. Close its window first, then delete it."
         case .running(let name): "\(name) is open in another copy of Tiller. Quit it first."
+        case .longLabel: "A label is one or two characters."
         }
     }
 }
@@ -173,6 +178,18 @@ enum Profiles {
         update { list in
             guard let index = list.profiles.firstIndex(where: { $0.id == id }) else { return }
             list.profiles[index].color = color?.rawValue
+        }
+        NotificationCenter.default.post(name: .profilesDidChange, object: nil)
+    }
+
+    /// Gives the profile's square and avatar up to two characters of its own
+    /// in place of its initials, or back its initials for an empty label.
+    static func setLabel(_ id: String, to label: String) throws {
+        let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard label.count <= 2 else { throw ProfileError.longLabel }
+        update { list in
+            guard let index = list.profiles.firstIndex(where: { $0.id == id }) else { return }
+            list.profiles[index].label = label.isEmpty ? nil : label
         }
         NotificationCenter.default.post(name: .profilesDidChange, object: nil)
     }
@@ -357,16 +374,17 @@ enum Profiles {
 @MainActor
 enum ProfileNamePrompt {
     static func run(
-        _ message: String, button: String, initial: String = "", on window: NSWindow?,
-        apply: @escaping @MainActor (String) throws -> Void
+        _ message: String, button: String, initial: String = "", placeholder: String = "Name", note: String? = nil,
+        on window: NSWindow?, apply: @escaping @MainActor (String) throws -> Void
     ) {
         let alert = NSAlert()
         alert.messageText = message
+        if let note { alert.informativeText = note }
         alert.addButton(withTitle: button)
         alert.addButton(withTitle: "Cancel")
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
         field.stringValue = initial
-        field.placeholderString = "Name"
+        field.placeholderString = placeholder
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
         let finish = { (response: NSApplication.ModalResponse) in

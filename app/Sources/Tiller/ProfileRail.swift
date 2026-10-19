@@ -2,7 +2,8 @@ import AppKit
 
 /// The color of a profile's square on the rail and of its avatar in menus:
 /// one picked from the square's context menu, else one from its place among
-/// the profiles, so the first eight differ.
+/// the profiles that took none, passing over those picked, so no two share
+/// one until there are more than eight.
 enum ProfileColor: String, CaseIterable, Sendable {
     case red, orange, yellow, green, teal, blue, purple, pink
 
@@ -26,8 +27,14 @@ enum ProfileColor: String, CaseIterable, Sendable {
 
     /// Each profile's color, by id.
     static func of(_ profiles: [Profile]) -> [String: ProfileColor] {
-        let pairs = profiles.enumerated().map { index, profile in
-            (profile.id, profile.color.flatMap(ProfileColor.init) ?? rotation[index % rotation.count])
+        let picked = profiles.compactMap { $0.color.flatMap(ProfileColor.init) }
+        var free = rotation.filter { !picked.contains($0) }
+        if free.isEmpty { free = rotation }
+        var automatic = 0
+        let pairs = profiles.map { profile in
+            if let color = profile.color.flatMap(ProfileColor.init) { return (profile.id, color) }
+            defer { automatic += 1 }
+            return (profile.id, free[automatic % free.count])
         }
         return Dictionary(pairs) { first, _ in first }
     }
@@ -53,6 +60,7 @@ enum ProfileColor: String, CaseIterable, Sendable {
 @MainActor
 enum ProfileAvatar {
     static func image(initials: String, color: ProfileColor, size: CGFloat = 16) -> NSImage {
+        let emoji = ProfileAvatar.isEmoji(initials)
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
             let radius = size * 0.3
             let fill = color.color.usingColorSpace(.sRGB) ?? color.color
@@ -60,7 +68,8 @@ enum ProfileAvatar {
             NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
             let luminance = 0.299 * fill.redComponent + 0.587 * fill.greenComponent + 0.114 * fill.blueComponent
             let ink = luminance > 0.7 ? NSColor.black.withAlphaComponent(0.75) : .white
-            let font = NSFont.systemFont(ofSize: size * (initials.count > 1 ? 0.46 : 0.56), weight: .bold).rounded
+            let scale: CGFloat = emoji ? (initials.count > 1 ? 0.36 : 0.62) : initials.count > 1 ? 0.46 : 0.56
+            let font = NSFont.systemFont(ofSize: size * scale, weight: .bold).rounded
             let text = NSAttributedString(string: initials, attributes: [.font: font, .foregroundColor: ink])
             let textSize = text.size()
             text.draw(at: NSPoint(x: rect.midX - textSize.width / 2, y: rect.midY - textSize.height / 2))
@@ -73,13 +82,28 @@ enum ProfileAvatar {
     /// Avatars for every profile, by id, their initials told apart as the
     /// rail tells them apart.
     static func images(for profiles: [Profile], size: CGFloat = 16) -> [String: NSImage] {
-        let initials = ProfileRailView.initials(for: profiles.map(\.name))
+        let labels = labels(for: profiles)
         let colors = ProfileColor.of(profiles)
         var images: [String: NSImage] = [:]
-        for (index, profile) in profiles.enumerated() {
-            images[profile.id] = image(initials: initials[index], color: colors[profile.id] ?? .blue, size: size)
+        for profile in profiles {
+            images[profile.id] = image(initials: labels[profile.id] ?? "?", color: colors[profile.id] ?? .blue, size: size)
         }
         return images
+    }
+
+    /// Whether a label has an emoji, which draws in its own colors and wants
+    /// a size of its own.
+    nonisolated static func isEmoji(_ label: String) -> Bool {
+        label.unicodeScalars.contains { $0.properties.isEmojiPresentation || $0.value == 0xFE0F }
+    }
+
+    /// What each profile's square and avatar show, by id: its own label, else
+    /// its initials, told apart from every profile's, open or not, so a
+    /// profile shows the same two letters on the rail and in menus.
+    static func labels(for profiles: [Profile]) -> [String: String] {
+        let initials = ProfileRailView.initials(for: profiles.map(\.name))
+        let pairs = profiles.enumerated().map { index, profile in (profile.id, profile.label ?? initials[index]) }
+        return Dictionary(pairs) { first, _ in first }
     }
 }
 
@@ -97,18 +121,20 @@ extension Theme {
 }
 
 /// The rail at the left of the window with Profile Tabs: a square for each
-/// open profile, tinted in its color with its initials, the shown one ringed
-/// and marked by a pill along the rail's edge, which grows a little under
-/// the mouse too. A dot in a square's corner pulses while its agent works
-/// out of sight, and stays once it has finished until the profile shows.
-/// After the squares, a plus button opens another profile. Drag a square to
-/// reorder them; with more than fit, the rail scrolls.
+/// open profile, tinted in its color with its initials or label, the shown
+/// one ringed and marked by a pill in its color along the rail's edge, which
+/// grows a little under the mouse too. A dot in a square's corner pulses
+/// while its agent works out of sight, and stays once it has finished until
+/// the profile shows. After the squares, a plus button opens another
+/// profile. Drag a square to reorder them, or drop a link on one to open it
+/// in that profile; with more than fit, the rail scrolls.
 @MainActor
 final class ProfileRailView: NSView {
     struct Item: Equatable {
         let id: String
         let name: String
-        let initials: String
+        /// Its own label, or its initials.
+        let label: String
         let color: ProfileColor
         let shown: Bool
         let busy: Bool
@@ -130,6 +156,11 @@ final class ProfileRailView: NSView {
     var onMove: ((String, Int) -> Void)?
     var menuFor: ((String) -> NSMenu?)?
     var addMenu: (() -> NSMenu)?
+    /// A link dropped on a profile's square.
+    var onDropURL: ((String, URL) -> Void)?
+    /// The second line of a profile's tip, asked for as it shows: its tabs
+    /// and the page in front.
+    var detailFor: ((String) -> String?)?
 
     var items: [Item] = [] {
         didSet {
@@ -274,6 +305,15 @@ final class ProfileRailView: NSView {
         onSelect?(id)
     }
 
+    fileprivate func drop(_ url: URL, on row: ProfileSquareView) {
+        guard let id = row.item?.id else { return }
+        onDropURL?(id, url)
+    }
+
+    fileprivate func detail(for row: ProfileSquareView) -> String? {
+        row.item.flatMap { detailFor?($0.id) }
+    }
+
     fileprivate func menu(for row: ProfileSquareView) -> NSMenu? {
         RailTip.shared.hide()
         return row.item.flatMap { menuFor?($0.id) }
@@ -353,7 +393,7 @@ private final class FillView: NSView {
 
 /// One profile's row on the rail: its square, the pill on the rail's edge
 /// beside it, and the agent's dot in the square's corner. The whole row
-/// takes the mouse.
+/// takes the mouse, and a link dragged over it.
 @MainActor
 private final class ProfileSquareView: NSView {
     weak var rail: ProfileRailView?
@@ -390,6 +430,10 @@ private final class ProfileSquareView: NSView {
     private var isDragging = false {
         didSet { if isDragging != oldValue { updateLook(animated: true) } }
     }
+    /// A link is dragged over it, which a drop opens in its profile.
+    private var isDropTarget = false {
+        didSet { if isDropTarget != oldValue { updateLook(animated: true) } }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -410,6 +454,7 @@ private final class ProfileSquareView: NSView {
         for sublayer in [pill, tile, badge] { layer?.addSublayer(sublayer) }
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
+        registerForDraggedTypes([.URL])
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -435,15 +480,25 @@ private final class ProfileSquareView: NSView {
         // Centered in what the hairline on the rail's edge leaves.
         tile.bounds = CGRect(x: 0, y: 0, width: size, height: size)
         tile.position = CGPoint(x: ((bounds.width - Theme.hairlineWidth) / 2).rounded(), y: bounds.midY)
-        let lineHeight = ceil(Self.font.ascender - Self.font.descender)
-        text.frame = CGRect(x: 0, y: ((size - lineHeight) / 2).rounded(), width: size, height: lineHeight)
-        text.contentsScale = window?.backingScaleFactor ?? 2
+        layoutText()
         let dot: CGFloat = 11
         badge.bounds = CGRect(x: 0, y: 0, width: dot, height: dot)
         badge.cornerRadius = dot / 2
         badge.position = CGPoint(x: tile.position.x + size / 2 - 2, y: bounds.midY + size / 2 - 2)
         CATransaction.commit()
         updateLook(animated: false)
+    }
+
+    /// The text's line, centered in the square for its size.
+    private func layoutText() {
+        let size = ProfileRailView.squareSize
+        let font = Self.font.withSize(text.fontSize)
+        let lineHeight = ceil(font.ascender - font.descender)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        text.frame = CGRect(x: 0, y: ((size - lineHeight) / 2).rounded(), width: size, height: lineHeight)
+        text.contentsScale = window?.backingScaleFactor ?? 2
+        CATransaction.commit()
     }
 
     /// Eases the square, the pill and the dot to the row's state.
@@ -456,27 +511,35 @@ private final class ProfileSquareView: NSView {
         CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
         CATransaction.setDisableActions(!animated || Theme.reduceMotion)
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            let fill: CGFloat = shown ? 0.3 : pressed || hovered ? 0.22 : 0.14
+            let hot = hovered || isDropTarget
+            let fill: CGFloat = shown || isDropTarget ? 0.3 : pressed || hovered ? 0.22 : 0.14
             tile.backgroundColor = color.withAlphaComponent(fill).cgColor
             tile.borderColor = color.withAlphaComponent(Theme.increaseContrast ? 1 : 0.75).cgColor
-            tile.borderWidth = shown ? 1.25 : 0
+            tile.borderWidth = isDropTarget ? 2 : shown ? 1.25 : 0
             let ink = item.color.ink
-            text.foregroundColor = (shown || hovered ? ink : ink.blended(withFraction: 0.3, of: .secondaryLabelColor) ?? ink).cgColor
-            text.string = item.initials
+            text.foregroundColor = (shown || hot ? ink : ink.blended(withFraction: 0.3, of: .secondaryLabelColor) ?? ink).cgColor
+            if text.string as? String != item.label {
+                // Emoji draw in their own colors, and at a size that fills
+                // the square as two letters do.
+                text.string = item.label
+                let emoji = ProfileAvatar.isEmoji(item.label)
+                text.fontSize = emoji ? (item.label.count > 1 ? 13 : 17) : Self.font.pointSize
+                layoutText()
+            }
 
-            // Along the rail's edge: the shown profile's in the accent, and
+            // Along the rail's edge: the shown profile's in its color, and
             // a stub under the mouse.
-            let pillHeight: CGFloat = shown ? 20 : hovered && !isDragging ? 8 : 0
+            let pillHeight: CGFloat = shown ? 20 : hot && !isDragging ? 8 : 0
             pill.bounds = CGRect(x: 0, y: 0, width: 5, height: pillHeight)
             pill.position = CGPoint(x: 0.5, y: bounds.midY)
-            pill.backgroundColor = (shown ? Theme.accentColor : Theme.secondaryText).cgColor
+            pill.backgroundColor = (shown ? item.color.ink : Theme.secondaryText).cgColor
             pill.opacity = pillHeight > 0 ? 1 : 0
 
             badge.backgroundColor = Theme.accentColor.cgColor
             badge.borderColor = Theme.railGround.cgColor
             badge.opacity = item.busy || item.finished ? 1 : 0
         }
-        let scale: CGFloat = isDragging ? 1.08 : pressed ? 0.92 : 1
+        let scale: CGFloat = isDragging || isDropTarget ? 1.08 : pressed ? 0.92 : 1
         tile.transform = CATransform3DMakeScale(scale, scale, 1)
         tile.shadowOpacity = isDragging ? 0.3 : 0
         CATransaction.commit()
@@ -507,7 +570,41 @@ private final class ProfileSquareView: NSView {
 
     private func tip(for item: ProfileRailView.Item) -> RailTip.Content {
         let note = item.busy ? "Agent working" : item.finished ? "Agent finished" : nil
-        return RailTip.Content(title: item.name, keys: shortcut, note: note)
+        return RailTip.Content(title: item.name, keys: shortcut, detail: rail?.detail(for: self), note: note)
+    }
+
+    // MARK: Dropping a link
+
+    /// The web or file address a drag carries, if any.
+    private func link(in info: NSDraggingInfo) -> URL? {
+        let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self]) as? [URL]
+        return urls?.first { ["http", "https", "file"].contains($0.scheme?.lowercased() ?? "") }
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard link(in: sender) != nil else { return [] }
+        isDropTarget = true
+        RailTip.shared.hide()
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        isDropTarget ? .copy : []
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        isDropTarget = false
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        isDropTarget = false
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        isDropTarget = false
+        guard let url = link(in: sender) else { return false }
+        rail?.drop(url, on: self)
+        return true
     }
 
     // MARK: Mouse
@@ -654,7 +751,7 @@ private final class RailAddButton: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         hovered = true
-        RailTip.shared.show(for: self, tip: RailTip.Content(title: "Open Profile", keys: nil, note: nil))
+        RailTip.shared.show(for: self, tip: RailTip.Content(title: "Open Profile", keys: nil, detail: nil, note: nil))
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -679,13 +776,15 @@ private final class RailAddButton: NSView {
 }
 
 /// The tip beside a square of the rail: the profile's name, the keys that
-/// show it and what its agent is doing. It comes after a moment under the
+/// show it, its tabs and the page in front, and what its agent is doing. It comes after a moment under the
 /// mouse, then at once while moving along the rail.
 @MainActor
 private final class RailTip {
     struct Content: Equatable {
         let title: String
         let keys: String?
+        /// Under the title: the profile's tabs and the page in front.
+        let detail: String?
         let note: String?
     }
 
@@ -695,6 +794,7 @@ private final class RailTip {
     private let plate = TipPlateView()
     private let title = NSTextField(labelWithString: "")
     private let keys = NSTextField(labelWithString: "")
+    private let detail = NSTextField(labelWithString: "")
     private let note = NSTextField(labelWithString: "")
     private let dot = FillView(Theme.accentColor)
     private let noteRow: NSStackView
@@ -719,6 +819,9 @@ private final class RailTip {
         title.lineBreakMode = .byTruncatingTail
         keys.font = .systemFont(ofSize: Theme.FontSize.secondary)
         keys.textColor = Theme.tertiaryText
+        detail.font = .systemFont(ofSize: Theme.FontSize.caption + 0.5)
+        detail.textColor = Theme.secondaryText
+        detail.lineBreakMode = .byTruncatingTail
         note.font = .systemFont(ofSize: Theme.FontSize.caption + 0.5)
         note.textColor = Theme.secondaryText
         dot.layer?.cornerRadius = 3
@@ -730,7 +833,7 @@ private final class RailTip {
         noteRow = NSStackView(views: [dot, note])
         noteRow.spacing = 6
         noteRow.alignment = .centerY
-        let stack = NSStackView(views: [titleRow, noteRow])
+        let stack = NSStackView(views: [titleRow, detail, noteRow])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 3
@@ -743,11 +846,13 @@ private final class RailTip {
             stack.topAnchor.constraint(equalTo: plate.topAnchor),
             stack.bottomAnchor.constraint(equalTo: plate.bottomAnchor),
             title.widthAnchor.constraint(lessThanOrEqualToConstant: 240),
+            detail.widthAnchor.constraint(lessThanOrEqualToConstant: 280),
         ])
         for label in [title, keys, note] {
             label.setContentCompressionResistancePriority(.required, for: .horizontal)
         }
         title.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        detail.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
         panel.contentView = plate
         // The squares hear no exit while Tiller is in the background.
         NotificationCenter.default.addObserver(
@@ -796,6 +901,8 @@ private final class RailTip {
         title.stringValue = tip.title
         keys.stringValue = tip.keys ?? ""
         keys.isHidden = tip.keys == nil
+        detail.stringValue = tip.detail ?? ""
+        detail.isHidden = tip.detail == nil
         note.stringValue = tip.note ?? ""
         noteRow.isHidden = tip.note == nil
         panel.appearance = window.effectiveAppearance

@@ -300,6 +300,14 @@ final class BrowserWindowController: NSResponder, NSToolbarDelegate,
     var hasFullscreenPage: Bool { fullscreenTab != nil }
     var isAgentBusy: Bool { agentPanel.isBusy }
 
+    /// Its tabs and the page in front, for the profile's tip on the rail.
+    var summary: String? {
+        guard let selectedTab else { return nil }
+        let count = tabs.count == 1 ? "1 tab" : "\(tabs.count) tabs"
+        let title = selectedTab.displayTitle
+        return title.isEmpty ? count : "\(count) · \(title)"
+    }
+
     // MARK: Tabs
 
     /// Opens `url` in a new tab at `index`, or at the end. A `restoring` tab
