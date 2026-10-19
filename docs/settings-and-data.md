@@ -46,13 +46,15 @@ Tiller passes these switches to Chromium:
 
 ## User agent
 
-Tiller sends Chrome's user agent with its own name added, so sites treat it as the Chrome it is:
+Tiller sends Chrome's user agent, unchanged, since sites that check the browser turn away one with another name in it:
 
 ```
-Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Tiller/0.1.0 Safari/537.36
+Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36
 ```
 
-The Chrome version is the major version of the bundled Chromium, the Tiller version is the app's.
+The Chrome version is the major version of the bundled Chromium.
+
+Its client hints are Chrome's too: `Sec-CH-UA` and `navigator.userAgentData` name Google Chrome alongside Chromium, with Chrome's full version, macOS's version and the Mac's architecture. A Chromium build names only Chromium, so Tiller gives each page these values through DevTools, along with its frames from other sites and its workers. Those frames and workers start paused and run once they have them. A tab opened at an address starts on a blank page that leaves no history, so the page's first scripts already see them. CEF starts a popup's page before Tiller can reach it, so a popup's first page that came too early loads again, unless it was the answer to a form.
 
 ## Data folder
 

@@ -3,6 +3,7 @@
 
 mod app_mac;
 mod browser;
+mod chrome_ua;
 mod cookies;
 mod downloads;
 mod ipc;
@@ -79,11 +80,10 @@ pub unsafe extern "C" fn tiller_core_start(
         root_cache_path: CefString::from(root.as_str()),
         cache_path: CefString::from(cache_path.as_str()),
         persist_session_cookies: 1,
-        // Chrome's user agent, with Tiller named after it, so sites treat
-        // Tiller as the Chrome it is. Chrome only gives its major version.
-        user_agent_product: CefString::from(
-            format!("Chrome/{}.0.0.0 Tiller/{}", sys::CHROME_VERSION_MAJOR, env!("CARGO_PKG_VERSION")).as_str(),
-        ),
+        // Chrome's user agent exactly, since sites that check the browser
+        // turn away one with another name in it. Chrome only gives its major
+        // version. The client hints are Chrome's too, see `chrome_ua`.
+        user_agent_product: CefString::from(chrome_ua::product().as_str()),
         log_severity: LogSeverity::WARNING,
         ..Default::default()
     };

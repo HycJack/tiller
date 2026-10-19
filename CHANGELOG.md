@@ -7,6 +7,11 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+- Tiller now passes as Chrome to sites that check the browser, such as
+  sign-in pages that said they couldn't verify it. Its user agent no
+  longer adds Tiller's name, and its client hints name Google Chrome as
+  Chrome's do, in every page, frame and worker. A popup's first page may
+  load twice for it.
 - The address bar works more like Chrome's. Typing completes the address
   of a page you've typed or visited before right in the bar, and the list
   under it adds the search engine's suggestions, which Settings > General

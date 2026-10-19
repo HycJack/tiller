@@ -1,7 +1,7 @@
 //! Browser registry and CEF handlers. Everything here runs on the CEF UI
 //! thread, which on macOS is the main thread.
 
-use crate::ipc;
+use crate::{chrome_ua, ipc};
 use cef::*;
 use std::{
     cell::RefCell,
@@ -55,7 +55,8 @@ struct Entry {
     /// The profile's request context the browser runs in (see `create_context`).
     context: i32,
     callbacks: Option<Callbacks>,
-    /// Keeps the DevTools observer attached. Added on the first DevTools call.
+    /// Keeps the DevTools observer attached, which keeps Chrome's client
+    /// hints in place (see `observe_devtools`). Added when the browser is.
     devtools: Option<Registration>,
     /// The favicon URL last fetched for the tab. Pages of one site share an
     /// icon, so the same URL again isn't fetched and encoded again.
@@ -83,6 +84,25 @@ enum CallPurpose {
     Socket(u64),
     /// The check before an unload, of whether the page is playing media.
     Unload,
+    /// Chrome's client hints, sent when the observer is added, which
+    /// `override_applied` follows up on.
+    Override,
+}
+
+/// How far a new browser's first page is in getting Chrome's client hints
+/// before its scripts run. DevTools reaches a page's renderer only once it is
+/// live, so a first page can have run its scripts without them.
+enum FirstLoad {
+    /// A tab on about:blank, hidden from the app, until DevTools has given
+    /// its renderer Chrome's client hints. Then it loads this URL.
+    Blank(String),
+    /// The tab is loading its URL. Once that commits, about:blank leaves its
+    /// history.
+    Loading,
+    /// A popup, whose first page CEF has on its way before DevTools can reach
+    /// it. `committed` once the page has, to be reloaded if that was before
+    /// the client hints.
+    Popup { committed: bool },
 }
 
 /// A page's request for the camera or microphone, waiting for the user.
@@ -122,6 +142,10 @@ thread_local! {
     /// Native script popups (OAuth windows). CEF owns their windows, but they
     /// must close before CEF shuts down.
     static POPUPS: RefCell<HashMap<i32, Browser>> = RefCell::new(HashMap::new());
+    /// The DevTools observer of each native popup, as `Entry::devtools`.
+    static POPUP_DEVTOOLS: RefCell<HashMap<i32, Registration>> = RefCell::new(HashMap::new());
+    /// Browsers whose first page is still being given Chrome's client hints.
+    static FIRST_LOADS: RefCell<HashMap<i32, FirstLoad>> = RefCell::new(HashMap::new());
     /// The tab `popup_tab` made for a `window.open` that CEF is about to
     /// create, taken by `on_after_created`.
     static PENDING_POPUP: RefCell<Option<PendingPopup>> = const { RefCell::new(None) };
@@ -166,6 +190,13 @@ fn is_unloading(id: i32) -> bool {
 
 fn callbacks_for(browser: Option<&mut Browser>) -> Option<Callbacks> {
     callbacks_for_id(browser?.identifier())
+}
+
+/// Callbacks for what the page shows, which a tab still on its hidden
+/// about:blank (`FirstLoad::Blank`) keeps from the app.
+fn page_callbacks_for(browser: Option<&mut Browser>) -> Option<Callbacks> {
+    let id = browser?.identifier();
+    if on_blank(id) { None } else { callbacks_for_id(id) }
 }
 
 fn callbacks_for_id(id: i32) -> Option<Callbacks> {
@@ -280,10 +311,13 @@ pub fn create(context_id: i32, tab_id: i32, parent_view: *mut c_void, width: i32
         ..Default::default()
     };
     let mut client = TillerClient::new();
+    // A page starts on about:blank, so DevTools can give the renderer
+    // Chrome's client hints before the page's scripts run (`FirstLoad`).
+    let blank_first = !url.is_empty() && url != "about:blank";
     let Some(browser) = browser_host_create_browser_sync(
         Some(&window_info),
         Some(&mut client),
-        Some(&CefString::from(url)),
+        Some(&CefString::from(if blank_first { "about:blank" } else { url })),
         Some(&BrowserSettings::default()),
         None,
         Some(&mut context),
@@ -305,7 +339,80 @@ pub fn create(context_id: i32, tab_id: i32, parent_view: *mut c_void, width: i32
             media_access: false,
         })
     });
+    if blank_first {
+        FIRST_LOADS.with_borrow_mut(|map| map.insert(id, FirstLoad::Blank(url.to_string())));
+        // Should DevTools not answer, the page loads anyway.
+        let mut task = LoadBlankTask::new(id);
+        post_delayed_task(ThreadId::UI, Some(&mut task), 1000);
+    }
+    if let Some(host) = get(id).and_then(|b| b.host()) {
+        attach_devtools(id, &host);
+    }
     id
+}
+
+/// Loads the URL of a tab waiting on about:blank (`FirstLoad::Blank`).
+fn load_blank(id: i32) {
+    let url = FIRST_LOADS.with_borrow_mut(|map| match map.remove(&id) {
+        Some(FirstLoad::Blank(url)) => {
+            map.insert(id, FirstLoad::Loading);
+            Some(url)
+        }
+        Some(other) => {
+            map.insert(id, other);
+            None
+        }
+        None => None,
+    });
+    if let Some(url) = url && let Some(frame) = get(id).and_then(|b| b.main_frame()) {
+        frame.load_url(Some(&CefString::from(url.as_str())));
+    }
+}
+
+/// Whether browser `id` is a tab still on its hidden about:blank.
+fn on_blank(id: i32) -> bool {
+    FIRST_LOADS.with_borrow(|map| matches!(map.get(&id), Some(FirstLoad::Blank(_))))
+}
+
+/// A new browser's main frame committed a page.
+fn first_load_committed(browser: &Browser, url: &str) {
+    let id = browser.identifier();
+    let done = FIRST_LOADS.with_borrow_mut(|map| match map.get_mut(&id) {
+        Some(FirstLoad::Loading) if url != "about:blank" => map.remove(&id).is_some(),
+        Some(FirstLoad::Popup { committed }) => {
+            *committed = true;
+            false
+        }
+        _ => false,
+    });
+    // Back would otherwise lead to the about:blank the tab started on.
+    if done && let Some(host) = browser.host() {
+        send_devtools(&host, None, "Page.resetNavigationHistory", serde_json::json!({}));
+    }
+}
+
+/// DevTools gave browser `id`'s renderer Chrome's client hints. A tab waiting
+/// on about:blank loads its URL; a popup's first page that came before them
+/// loads again, unless it was posted.
+fn override_applied(id: i32) {
+    let popup_committed = FIRST_LOADS.with_borrow_mut(|map| match map.get(&id) {
+        Some(&FirstLoad::Popup { committed }) => {
+            map.remove(&id);
+            Some(committed)
+        }
+        _ => None,
+    });
+    match popup_committed {
+        None => load_blank(id),
+        Some(false) => {}
+        Some(true) => {
+            let Some(browser) = get(id).or_else(|| POPUPS.with_borrow(|map| map.get(&id).cloned())) else { return };
+            let posted = browser.host().and_then(|h| h.visible_navigation_entry()).is_some_and(|e| e.has_post_data() != 0);
+            if !posted {
+                browser.reload();
+            }
+        }
+    }
 }
 
 /// Stops callbacks into the Swift side, whose context may be freed soon, and
@@ -416,13 +523,81 @@ fn attach_devtools(id: i32, host: &BrowserHost) -> bool {
         return true;
     }
     // Attached outside the borrow: CEF may call back into the handlers.
-    let mut observer = TillerDevToolsObserver::new();
-    let registration = host.add_dev_tools_message_observer(Some(&mut observer));
+    let registration = observe_devtools(id, host);
     BROWSERS.with_borrow_mut(|map| {
         let Some(entry) = map.get_mut(&id) else { return false };
         entry.devtools = registration;
         entry.devtools.is_some()
     })
+}
+
+/// Adds the DevTools observer to `host` and gives its page Chrome's client
+/// hints, which last while the observer stays. Frames in other processes and
+/// workers start paused and get them too as they attach (`attached_to_target`).
+fn observe_devtools(id: i32, host: &BrowserHost) -> Option<Registration> {
+    let mut observer = TillerDevToolsObserver::new();
+    let registration = host.add_dev_tools_message_observer(Some(&mut observer))?;
+    // The reply comes once the renderer has them, for `override_applied`.
+    let message_id = next_message_id();
+    DEVTOOLS_CALLS.with_borrow_mut(|calls| calls.insert(message_id, PendingCall { browser_id: id, purpose: CallPurpose::Override }));
+    let message = serde_json::json!({
+        "id": message_id,
+        "method": "Emulation.setUserAgentOverride",
+        "params": chrome_ua::override_params(),
+    })
+    .to_string();
+    if host.send_dev_tools_message(Some(message.as_bytes())) == 0 {
+        DEVTOOLS_CALLS.with_borrow_mut(|calls| calls.remove(&message_id));
+    }
+    send_devtools(host, None, "Target.setAutoAttach", auto_attach_params());
+    Some(registration)
+}
+
+fn auto_attach_params() -> serde_json::Value {
+    serde_json::json!({ "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true })
+}
+
+/// Sends a DevTools call whose reply nobody reads, to the page or to the
+/// attached target of `session`.
+fn send_devtools(host: &BrowserHost, session: Option<&str>, method: &str, params: serde_json::Value) {
+    let mut message = serde_json::json!({ "id": next_message_id(), "method": method, "params": params });
+    if let Some(session) = session {
+        message["sessionId"] = session.into();
+    }
+    host.send_dev_tools_message(Some(message.to_string().as_bytes()));
+}
+
+/// A frame in another process or a worker attached, paused: gives it Chrome's
+/// client hints, has it attach its own, then lets it run.
+fn attached_to_target(browser: &Browser, event: &[u8]) {
+    #[derive(serde::Deserialize)]
+    struct Event {
+        params: Params,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Params {
+        session_id: String,
+        target_info: TargetInfo,
+    }
+    #[derive(serde::Deserialize)]
+    struct TargetInfo {
+        r#type: String,
+    }
+    let Ok(event) = serde_json::from_slice::<Event>(event) else { return };
+    let Some(host) = browser.host() else { return };
+    let session = Some(event.params.session_id.as_str());
+    // Workers have no Emulation domain; Network's override covers them.
+    let method = match event.params.target_info.r#type.as_str() {
+        "page" | "iframe" => Some("Emulation.setUserAgentOverride"),
+        "worker" | "shared_worker" | "service_worker" => Some("Network.setUserAgentOverride"),
+        _ => None,
+    };
+    if let Some(method) = method {
+        send_devtools(&host, session, method, chrome_ua::override_params());
+        send_devtools(&host, session, "Target.setAutoAttach", auto_attach_params());
+    }
+    send_devtools(&host, session, "Runtime.runIfWaitingForDebugger", serde_json::json!({}));
 }
 
 /// Sends one DevTools protocol `message`, framed with `message_id` by the
@@ -458,7 +633,7 @@ fn fail_devtools_calls(browser_id: i32) {
             .filter_map(|id| calls.remove(id))
             .filter_map(|c| match c.purpose {
                 CallPurpose::Socket(token) => Some(token),
-                CallPurpose::Unload => None,
+                CallPurpose::Unload | CallPurpose::Override => None,
             })
             .collect()
     });
@@ -492,10 +667,19 @@ wrap_dev_tools_message_observer! {
 
     impl DevToolsMessageObserver {
         /// Hands the matching call its reply, to be read on the waiting
-        /// thread. Events and replies to anyone else's calls are left for
-        /// CEF's default handling.
-        fn on_dev_tools_message(&self, _browser: Option<&mut Browser>, message: Option<&[u8]>) -> i32 {
+        /// thread, and answers a target attaching. Other events and replies
+        /// to anyone else's calls are left for CEF's default handling.
+        fn on_dev_tools_message(&self, browser: Option<&mut Browser>, message: Option<&[u8]>) -> i32 {
             let Some(message) = message else { return 0 };
+            if message.starts_with(b"{\"method\":\"Target.attachedToTarget\"")
+                && let Some(browser) = browser
+            {
+                // On the next turn, rather than calling into DevTools from
+                // inside its observer.
+                let mut task = AttachedTask::new(browser.clone(), message.to_vec());
+                post_task(ThreadId::UI, Some(&mut task));
+                return 0;
+            }
             let Some(id) = devtools_reply_id(message) else { return 0 };
             let Some(call) = DEVTOOLS_CALLS.with_borrow_mut(|calls| calls.remove(&id)) else { return 0 };
             match call.purpose {
@@ -506,8 +690,49 @@ wrap_dev_tools_message_observer! {
                     let mut task = MediaCheckedTask::new(call.browser_id, message.to_vec());
                     post_task(ThreadId::UI, Some(&mut task));
                 }
+                CallPurpose::Override => {
+                    let mut task = OverrideAppliedTask::new(call.browser_id);
+                    post_task(ThreadId::UI, Some(&mut task));
+                }
             }
             1
+        }
+    }
+}
+
+wrap_task! {
+    struct AttachedTask {
+        browser: Browser,
+        event: Vec<u8>,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            attached_to_target(&self.browser, &self.event);
+        }
+    }
+}
+
+wrap_task! {
+    struct OverrideAppliedTask {
+        browser_id: i32,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            override_applied(self.browser_id);
+        }
+    }
+}
+
+wrap_task! {
+    struct LoadBlankTask {
+        browser_id: i32,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            load_blank(self.browser_id);
         }
     }
 }
@@ -836,7 +1061,7 @@ wrap_display_handler! {
                 .and_then(|h| h.visible_navigation_entry())
                 .map(|e| CefString::from(&e.display_url()))
                 .filter(|u| u.to_string().starts_with("view-source:"));
-            if let Some(cb) = callbacks_for(Some(browser)) && let Some(f) = cb.address_changed {
+            if let Some(cb) = page_callbacks_for(Some(browser)) && let Some(f) = cb.address_changed {
                 let url = to_cstring(source.as_ref().or(url));
                 unsafe { f(cb.ctx, url.as_ptr()) };
             }
@@ -866,7 +1091,7 @@ wrap_display_handler! {
         }
 
         fn on_title_change(&self, browser: Option<&mut Browser>, title: Option<&CefString>) {
-            if let Some(cb) = callbacks_for(browser) && let Some(f) = cb.title_changed {
+            if let Some(cb) = page_callbacks_for(browser) && let Some(f) = cb.title_changed {
                 let title = to_cstring(title);
                 unsafe { f(cb.ctx, title.as_ptr()) };
             }
@@ -905,7 +1130,7 @@ wrap_display_handler! {
         }
 
         fn on_loading_progress_change(&self, browser: Option<&mut Browser>, progress: f64) {
-            if let Some(cb) = callbacks_for(browser) && let Some(f) = cb.loading_progress {
+            if let Some(cb) = page_callbacks_for(browser) && let Some(f) = cb.loading_progress {
                 unsafe { f(cb.ctx, progress) };
             }
         }
@@ -1041,18 +1266,18 @@ wrap_load_handler! {
 
     impl LoadHandler {
         fn on_loading_state_change(&self, browser: Option<&mut Browser>, is_loading: i32, can_go_back: i32, can_go_forward: i32) {
-            if let Some(cb) = callbacks_for(browser) && let Some(f) = cb.loading_state_changed {
+            if let Some(cb) = page_callbacks_for(browser) && let Some(f) = cb.loading_state_changed {
                 unsafe { f(cb.ctx, is_loading != 0, can_go_back != 0, can_go_forward != 0) };
             }
         }
 
         /// A new page started loading: the old one's camera and microphone
-        /// requests go unanswered, so they are denied.
+        /// requests go unanswered, so they are denied. A new browser's first
+        /// page moves on (`first_load_committed`).
         fn on_load_start(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType) {
-            if frame.is_none_or(|f| f.is_main() == 0) {
-                return;
-            }
+            let Some(frame) = frame.filter(|f| f.is_main() != 0) else { return };
             let Some(browser) = browser else { return };
+            first_load_committed(browser, &CefString::from(&frame.url()).to_string());
             drop_media_requests(browser.identifier());
             if let Some(cb) = callbacks_for(Some(browser)) && let Some(f) = cb.media_requests_dropped {
                 unsafe { f(cb.ctx) };
@@ -1151,6 +1376,7 @@ wrap_life_span_handler! {
                     map.get(&opener).or_else(|| map.values().next()).map(|e| e.context).unwrap_or(0)
                 });
                 let callbacks = pending.callbacks;
+                let host = browser.host();
                 BROWSERS.with_borrow_mut(|map| {
                     map.insert(id, Entry {
                         browser: browser.clone(),
@@ -1165,13 +1391,22 @@ wrap_life_span_handler! {
                         media_access: false,
                     })
                 });
+                FIRST_LOADS.with_borrow_mut(|map| map.insert(id, FirstLoad::Popup { committed: false }));
+                if let Some(host) = host {
+                    attach_devtools(id, &host);
+                }
                 if let Some(f) = callbacks.created {
                     unsafe { f(callbacks.ctx, id) };
                 }
                 return;
             }
             if browser.is_popup() != 0 {
-                POPUPS.with_borrow_mut(|map| map.insert(browser.identifier(), browser.clone()));
+                let id = browser.identifier();
+                POPUPS.with_borrow_mut(|map| map.insert(id, browser.clone()));
+                FIRST_LOADS.with_borrow_mut(|map| map.insert(id, FirstLoad::Popup { committed: false }));
+                if let Some(registration) = browser.host().and_then(|h| observe_devtools(id, &h)) {
+                    POPUP_DEVTOOLS.with_borrow_mut(|map| map.insert(id, registration));
+                }
             }
         }
 
@@ -1206,7 +1441,11 @@ wrap_life_span_handler! {
         fn on_before_close(&self, browser: Option<&mut Browser>) {
             let Some(browser) = browser else { return };
             let id = browser.identifier();
+            FIRST_LOADS.with_borrow_mut(|map| map.remove(&id));
             if POPUPS.with_borrow_mut(|map| map.remove(&id)).is_some() {
+                // Released outside the borrow, as a tab's below.
+                let registration = POPUP_DEVTOOLS.with_borrow_mut(|map| map.remove(&id));
+                drop(registration);
                 // The last popup closing after the last tab finishes the quit.
                 if BROWSERS.with_borrow(|map| map.is_empty()) && POPUPS.with_borrow(|map| map.is_empty()) {
                     quit_message_loop();
