@@ -499,22 +499,27 @@ final class BrowserWindowController: NSResponder, NSToolbarDelegate,
         host?.awakeChanged(self)
         failLoadWaits(for: tab)
         jevOverlay.tabClosed(tab.id)
+        if !closingAll && !tab.isBlank {
+            profile.session.pushClosedTab(.init(url: tab.url, title: tab.title), at: index)
+        }
+        // A last tab closing on its own leaves the new tab page in its place.
+        // It opens before the old view goes, so CEF never runs out of
+        // browsers and quits. Closing the window or profile doesn't.
+        if tabs.count == 1 && !closingAll {
+            newTab(nil)
+        }
         tab.detach()
         // Tearing down the view is what lets CEF finish closing the browser.
         tab.hostView.removeFromSuperview()
         tabs.remove(at: index)
 
-        // The profile closes, and with its window's last profile Tiller quits.
-        // The session saved before still has this tab, so the next launch
-        // reopens it.
+        // Closing the profile or window keeps the session saved before it
+        // started closing, so the next launch reopens those tabs.
         guard !tabs.isEmpty else {
             selectedTab = nil
             tabStrip.update(tabs: [], selected: nil)
             host?.browserDidClose(self)
             return
-        }
-        if !closingAll && !tab.isBlank {
-            profile.session.pushClosedTab(.init(url: tab.url, title: tab.title), at: index)
         }
         if tab === selectedTab {
             selectedTab = nil
