@@ -10,6 +10,8 @@ beta shows what `## Unreleased` holds at the time.
 - Closing the last tab keeps the window and profile open on the configured
   new tab page. The closed page can still be reopened with Cmd+Shift+T;
   closing a window or profile, or quitting Tiller, works as before.
+- Apps that list browsers, such as link pickers, now include Tiller, and
+  a web page handed off from another device opens in Tiller.
 
 ## 0.4.1
 

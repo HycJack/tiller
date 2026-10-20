@@ -296,6 +296,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         IncomingLinks.route(urls)
     }
 
+    /// A web page handed off from another device, which macOS sends here
+    /// because the bundle declares `NSUserActivityTypeBrowsingWeb`.
+    func application(
+        _ application: NSApplication,
+        continue userActivity: NSUserActivity,
+        restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void
+    ) -> Bool {
+        guard userActivity.activityType == NSUserActivityTypeBrowsingWeb, let url = userActivity.webpageURL else {
+            return false
+        }
+        self.application(application, open: [url])
+        return true
+    }
+
     /// Clicking the Dock icon with no window showing brings back the window
     /// of the profile used last.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

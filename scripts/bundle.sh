@@ -91,6 +91,7 @@ write_plist() {
         <key>CFBundleTypeRole</key><string>Viewer</string>
         <key>CFBundleURLSchemes</key><array><string>http</string><string>https</string></array>
     </dict></array>
+    <key>NSUserActivityTypes</key><array><string>NSUserActivityTypeBrowsingWeb</string></array>
     <key>CFBundleDocumentTypes</key><array><dict>
         <key>CFBundleTypeName</key><string>HTML document</string>
         <key>CFBundleTypeRole</key><string>Viewer</string>
