@@ -1961,10 +1961,243 @@ extension BrowserWindowController {
             let tab = try tab(for: params)
             requestClose(tab)
             return ["closing": tab.id]
+        case "tabs.back", "tabs.forward":
+            let tab = try tab(for: params)
+            let back = method == "tabs.back"
+            guard tab.isStarted, back ? tab.canGoBack : tab.canGoForward else {
+                throw ControlError("the tab has no page to go \(back ? "back" : "forward") to")
+            }
+            if back { tab.goBack() } else { tab.goForward() }
+            return info(tab)
+        case "tabs.reload":
+            let tab = try tab(for: params)
+            if tab.isStarted { tab.reload() } else { start(tab) }
+            return info(tab)
+        case "tabs.stop":
+            let tab = try tab(for: params)
+            tab.stop()
+            return info(tab)
+        case "tabs.duplicate":
+            let tab = try tab(for: params)
+            guard !tab.isBlank else { throw ControlError("a blank tab has nothing to duplicate") }
+            let copy = openTab(url: tab.url, select: params["select"] as? Bool ?? true, at: tabs.firstIndex { $0 === tab }.map { $0 + 1 })
+            return info(copy)
+        case "tabs.move":
+            let tab = try tab(for: params)
+            guard let place = (params["index"] as? NSNumber)?.intValue, (1...tabs.count).contains(place) else {
+                throw ControlError("index is a place from 1 to \(tabs.count)")
+            }
+            tabStrip(tabStrip, move: tab, to: place - 1)
+            return ["tabs": tabs.map(info)]
+        case "tabs.close_others", "tabs.close_right":
+            let tab = try tab(for: params)
+            guard let index = tabs.firstIndex(where: { $0 === tab }) else { throw ControlError("the tab closed") }
+            let closing = method == "tabs.close_others"
+                ? tabs.filter { $0 !== tab } : Array(tabs[(index + 1)...])
+            closingAll = false
+            closing.forEach { $0.close() }
+            return ["closing": closing.map(\.id)]
+        case "tabs.closed":
+            return ["tabs": profile.session.recentlyClosed.map { ["url": $0.url, "title": $0.title] }]
+        case "tabs.reopen":
+            guard let closed = profile.session.popClosedTab() else { throw ControlError("no closed tab to reopen") }
+            let tab = openTab(url: closed.tab.url, select: params["select"] as? Bool ?? true, at: closed.index, restoring: closed.tab)
+            return info(tab)
+        case "tabs.zoom":
+            let tab = try tab(for: params)
+            guard tab.isStarted else { throw ControlError("the tab isn't loaded") }
+            if let step = (params["step"] as? NSNumber)?.int32Value { tab.zoom(step) }
+            // Chromium applies the zoom on its next turn.
+            return ControlDeferred { [weak self, weak tab] reply in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let self, let tab else { return reply(.failure(ControlError("the tab closed"))) }
+                        if tab === self.selectedTab { self.addressBar.showZoom(tab.zoomFactor) }
+                        var result = self.info(tab)
+                        result["zoom"] = (tab.zoomFactor * 100).rounded()
+                        reply(.success(result))
+                    }
+                }
+            }
+        case "tabs.source":
+            let tab = try tab(for: params)
+            guard !tab.isBlank else { throw ControlError("a blank tab has no source") }
+            let source = openTab(url: "view-source:" + tab.url, select: params["select"] as? Bool ?? true,
+                                 at: tabs.firstIndex { $0 === tab }.map { $0 + 1 })
+            return info(source)
+        case "tabs.devtools":
+            let tab = try tab(for: params)
+            start(tab)
+            tab.showDevTools()
+            return info(tab)
+        case "tabs.print":
+            let tab = try tab(for: params)
+            guard tab.isStarted else { throw ControlError("the tab isn't loaded") }
+            if tab !== selectedTab { select(tab) }
+            profile.show()
+            tab.print()
+            return info(tab)
+        case "tabs.fill_password":
+            let tab = try tab(for: params)
+            var logins = savedLogins(for: tab)
+            guard !logins.isEmpty else { throw ControlError("no saved login for this page's site") }
+            if let username = params["username"] as? String {
+                logins = logins.filter { $0.username == username }
+                guard !logins.isEmpty else { throw ControlError("no saved login with username \(username) for this site") }
+            }
+            guard logins.count == 1 else {
+                throw ControlError("the site has \(logins.count) logins: \(logins.map(\.username).joined(separator: ", ")). Give the username.")
+            }
+            fill(logins[0], in: tab)
+            return ["filling": logins[0].username, "site": logins[0].origin]
+        case "window.show":
+            if let tab = try? tab(for: params), params["tab_id"] != nil, tab !== selectedTab { select(tab) }
+            profile.show()
+            return ["shown": profile.id]
+        case "window.agent":
+            let show = params["show"] as? Bool ?? !agentPanelShown
+            if show != agentPanelShown { toggleAgentPanel(nil) }
+            if show, let chat = params["chat"] as? String, !chat.isEmpty {
+                guard profile.agentHistory.conversation(chat) != nil || agentPanel.place(of: chat) != nil else {
+                    throw ControlError("no chat with id \(chat)")
+                }
+                agentPanel.open(chat)
+            }
+            return ["agent_panel": agentPanelShown]
+        case "window.downloads":
+            profile.show()
+            showDownloads(nil)
+            return ["shown": true]
+        case "window.find":
+            let tab = try tab(for: params)
+            if tab !== selectedTab { select(tab) }
+            profile.show()
+            showFindBar(nil)
+            let text = params["text"] as? String ?? ""
+            findBar.field.stringValue = text
+            find(text)
+            return info(tab)
+        case "window.fullscreen":
+            profile.show()
+            window?.toggleFullScreen(nil)
+            return ["shown": true]
+        case "window.settings":
+            profile.show()
+            (NSApp.delegate as? AppDelegate)?.showSettings(pane: params["pane"] as? String ?? "General", profile: profile)
+            return ["shown": true]
+        case _ where method.hasPrefix("agent."):
+            return try agentControl(method, params: params)
         #if DEBUG
         case _ where method.hasPrefix("ui."):
             return try debugUI(String(method.dropFirst(3)), params: params)
         #endif
+        default:
+            throw ControlError("unknown method \(method)")
+        }
+    }
+
+    /// `agent.*`: chats sent from the `tiller` CLI and the profile's chats.
+    private func agentControl(_ method: String, params: [String: Any]) throws -> Any {
+        let history = profile.agentHistory
+        let dates = ISO8601DateFormatter()
+        func chatID() throws -> String {
+            guard let id = params["chat"] as? String, !id.isEmpty else { throw ControlError("name the chat by its id") }
+            return id
+        }
+        func describe(_ conversation: AgentConversation) -> [String: Any] {
+            var result: [String: Any] = [
+                "id": conversation.id, "title": conversation.title, "agent": conversation.choice.rawValue,
+                "agent_name": profile.providers.displayName(conversation.choice),
+                "created": dates.string(from: conversation.created), "updated": dates.string(from: conversation.updated),
+                "busy": agentPanel.isChatBusy(conversation.id), "scheduled": conversation.scheduleID != nil,
+            ]
+            if let place = agentPanel.place(of: conversation.id) { result["tab"] = place }
+            if let options = conversation.modelOptions {
+                if let model = options.model { result["model"] = model }
+                if let effort = options.effort { result["effort"] = effort }
+            }
+            return result
+        }
+        switch method {
+        case "agent.chats":
+            let limit = (params["limit"] as? NSNumber)?.intValue ?? 50
+            return ["chats": history.conversations.prefix(max(limit, 1)).map(describe)]
+        case "agent.status":
+            let id = try chatID()
+            guard let conversation = history.conversation(id) else {
+                guard agentPanel.place(of: id) != nil else { throw ControlError("no chat with id \(id)") }
+                return ["id": id, "busy": agentPanel.isChatBusy(id)]
+            }
+            return describe(conversation)
+        case "agent.transcript":
+            let id = try chatID()
+            guard let conversation = history.conversation(id) else { throw ControlError("no chat with id \(id)") }
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let records = history.records(for: id).compactMap { record -> Any? in
+                (try? encoder.encode(record)).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+            }
+            var result = describe(conversation)
+            result["records"] = records
+            return result
+        case "agent.send":
+            guard let text = (params["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+                throw ControlError("send needs a message")
+            }
+            let providers = profile.providers
+            let kind = try (params["agent"] as? String).map { name in
+                guard let kind = AgentChoice(rawValue: name), providers.exists(kind) else {
+                    throw ControlError("agent is one of \(providers.all.map(\.rawValue).joined(separator: ", "))")
+                }
+                return kind
+            }
+            let chosen = kind ?? providers.current
+            var options: AgentModelOptions?
+            let keys = ["model", "effort", "context"]
+            if keys.contains(where: { params[$0] != nil }) || params["fast"] != nil {
+                var picked = profile.settings.agentModelOptions(for: chosen)
+                if let model = params["model"] as? String { picked.model = model.isEmpty ? nil : model }
+                if let effort = params["effort"] as? String { picked.effort = effort.isEmpty ? nil : effort }
+                if let context = params["context"] as? String { picked.context = context.isEmpty ? nil : context }
+                if let fast = params["fast"] as? Bool { picked.fast = fast }
+                if let effort = picked.effort, !chosen.effortLevels(model: picked.model).contains(effort) {
+                    throw ControlError("effort for \(providers.displayName(chosen)) is one of \(chosen.effortLevels(model: picked.model).joined(separator: ", "))")
+                }
+                if let context = picked.context, !chosen.contextSizes.contains(where: { $0.value == context }) {
+                    throw ControlError("context for \(providers.displayName(chosen)) is one of \(chosen.contextSizes.map(\.value).joined(separator: ", "))")
+                }
+                options = picked
+            }
+            let tools = try (params["tools"] as? [String]).map { names in
+                try names.map { name in
+                    guard let tool = AgentTool(rawValue: name) else { throw ControlError("tools are any of read, write and shell") }
+                    return tool
+                }
+            }
+            let existing = params["chat"] as? String
+            if existing != nil, kind != nil || options != nil || tools != nil {
+                throw ControlError("a chat keeps its agent, model and tools; leave them out when continuing one")
+            }
+            var chat = ""
+            let job = try ControlJobs.startThrowing { finish in
+                chat = try self.agentPanel.runFromCommandLine(text, chat: existing, kind: kind, tools: tools, options: options) { outcome in
+                    switch outcome {
+                    case .finished(let text): finish(.success(["chat": chat, "status": "done", "text": text ?? ""]))
+                    case .failed(let message): finish(.success(["chat": chat, "status": "failed", "error": message]))
+                    case .stopped: finish(.success(["chat": chat, "status": "stopped"]))
+                    }
+                }
+            }
+            return ["job": job, "chat": chat]
+        case "agent.stop":
+            let id = try chatID()
+            guard agentPanel.stopChat(id) else { throw ControlError("that chat isn't working") }
+            return ["stopping": id]
+        case "agent.delete":
+            let id = try chatID()
+            guard history.conversation(id) != nil else { throw ControlError("no chat with id \(id)") }
+            agentPanel.deleteChat(id)
+            return ["deleted": id]
         default:
             throw ControlError("unknown method \(method)")
         }
@@ -2198,6 +2431,25 @@ extension BrowserWindowController {
         open(url, .click(OpenDisposition.currentFlags))
     }
 
+    /// Empties history, the start page's favicons and the recently closed
+    /// tabs, for Clear History… and `tiller history clear`.
+    func clearHistoryNow() {
+        profile.history.clear()
+        profile.session.clearClosedTabs()
+        // So each open tab saves its favicon again.
+        tabs.forEach { $0.recordedIcon = nil }
+    }
+
+    /// The tab sidebar's icons-only state, for `tiller settings`.
+    func setSidebarCollapsed(_ collapsed: Bool) {
+        profile.settings.sidebarCollapsed = collapsed
+        guard tabLayout == .vertical, fullscreenTab == nil, sidebar.isCollapsed != collapsed else { return }
+        sidebar.isCollapsed = collapsed
+        fitSidebar()
+    }
+
+    var tabCount: Int { tabs.count }
+
     @objc func clearHistory(_ sender: Any?) {
         guard let window else { return }
         let alert = NSAlert()
@@ -2207,12 +2459,7 @@ extension BrowserWindowController {
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { response in
             guard response == .alertFirstButtonReturn else { return }
-            MainActor.assumeIsolated {
-                self.profile.history.clear()
-                self.profile.session.clearClosedTabs()
-                // So each open tab saves its favicon again.
-                self.tabs.forEach { $0.recordedIcon = nil }
-            }
+            MainActor.assumeIsolated { self.clearHistoryNow() }
         }
     }
 

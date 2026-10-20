@@ -558,7 +558,8 @@ enum AgentScheduleControl {
 
     static func control(_ method: String, params: [String: Any], profile: ProfileContext) throws -> Any {
         let store = profile.schedules
-        let caller = caller(params["chat"] as? String, profile: profile)
+        let caller = params["user"] as? Bool == true
+            ? Caller(tools: Set(AgentTool.allCases)) : caller(params["chat"] as? String, profile: profile)
         if method != "schedules.list", caller.isScheduledRun {
             throw ControlError("A scheduled run can list schedules but not change or run them. Ask the user to do it from a chat they started, or in Settings > Scheduled.")
         }

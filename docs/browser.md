@@ -180,7 +180,7 @@ A profile has its own cookies and site data, history, open tabs, saved passwords
 - The profile used last is the one whose window was in front last. Clicking the Dock icon with no window showing brings its window back. `open Tiller.app --args -profile <name or id>` opens only that profile; with Tiller running, launching the app with `-profile` opens that profile in the running Tiller.
 - A profile can only be open once. An older Tiller, which ran a process per profile, can't open a profile this one has open, nor the other way round.
 - Links and HTML files from other apps open in the profile used last, which opens if it was closed.
-- Names must differ, since [`tiller --profile`](tools.md#command-line-tool) picks a profile by name.
+- Names must differ, since [`tiller --profile`](tools.md#command-line-tool) picks a profile by name. `tiller profile` lists, opens, creates, renames, colors, labels, moves, closes and deletes profiles from a shell.
 - Window > Show Next Profile (Ctrl+Cmd+]) and Show Previous Profile (Ctrl+Cmd+[) go through the open profiles, and Ctrl+Cmd+1 to Ctrl+Cmd+9 show one by its place, in the Profiles menu's order or along the rail.
 
 ### Profile Tabs

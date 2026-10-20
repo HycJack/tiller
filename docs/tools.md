@@ -17,6 +17,11 @@ Tiller exposes one set of browser tools two ways: as an MCP server for agents an
 | `click` | Real mouse click on an element's center by `ref` or CSS `selector` |
 | `type` | Clicks a field and types into it, replacing its text unless `append` is set, optionally presses Enter |
 | `select` | Picks a dropdown (`<select>`) option by its value or label |
+| `go_back`, `go_forward` | Goes back or forward in the tab's history and waits for the load |
+| `reload` | Reloads the tab and waits for the load |
+| `find_text` | Counts where a text appears in the page's text, ignoring case, with the first `max_matches` (10) and the text around them |
+| `zoom` | Zooms the page `in`, `out` or `reset`, kept per site as Cmd+= does, and returns the zoom in percent |
+| `search_history` | Searches history by URL and title, best first, or lists the pages visited last without `query` |
 | `run_task` | Hands a short task on the page, such as filling a search form, to TypeSafe's Jev (see [run_task](#run_task)) |
 | `screenshot` | JPEG of the visible part of the tab, in CSS pixels, the units `click` uses |
 | `eval_js` | Runs an expression in the page and returns the value as JSON |
@@ -29,6 +34,8 @@ Tiller exposes one set of browser tools two ways: as an MCP server for agents an
 | `run_schedule` | Runs a scheduled prompt now, without moving its next run |
 
 Tools act on the selected tab unless given `tab_id`, and work in background tabs without bringing them to the front, so agents can each work in a tab of their own while you use another. Only `select_tab` and `new_tab` without `background` change the selected tab.
+
+The MCP server has only tools that read or drive pages, history search among them. Managing Tiller itself, its profiles, settings, extensions and the rest, is left to the [command-line tool](#command-line-tool).
 
 Background tabs are hidden, and Chromium stops drawing hidden pages and stalls or drops their input. So `click`, `type`, `select`, `run_task` and `screenshot` wake their tab first: Tiller unhides it behind the selected tab, where it draws and takes input, and hides it again 30 seconds after the last of these calls. While awake, the page counts as visible, so its animations and videos run as in a front tab. `read_page` and `eval_js` don't need to wake a tab.
 
@@ -52,7 +59,39 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"r
 
 ## Command-line tool
 
-`tiller` runs the same browser tools from a shell, so scripts and agents outside Tiller, such as Claude Code with its Bash tool, can drive the browser. It ships at `build/Tiller.app/Contents/Helpers/tiller`, not next to `Tiller` in `Contents/MacOS`, where the two names would be one file on a case-insensitive disk. Tiller > Install Command Line Tool… links it as `~/.local/bin/tiller` and says if that folder isn't on your PATH. Install again after moving the app.
+`tiller` runs the same browser tools from a shell, so scripts and agents outside Tiller, such as Claude Code with its Bash tool, can drive the browser, and does what Tiller's menus and Settings do: profiles, history, downloads, the agent panel, skills, scheduled prompts, settings, site permissions, saved logins, extensions and the Chrome import. It ships at `build/Tiller.app/Contents/Helpers/tiller`, not next to `Tiller` in `Contents/MacOS`, where the two names would be one file on a case-insensitive disk. Tiller > Install Command Line Tool… links it as `~/.local/bin/tiller` and says if that folder isn't on your PATH. Install again after moving the app.
+
+`tiller --help` lists the commands, and `tiller <area> --help` an area's, as `tiller agent --help`. Options can come before or after the command, and `--json` prints the raw result instead of text. Errors go to stderr with exit code 1, or 2 for bad arguments.
+
+### Profiles and Tiller
+
+A command acts on the profile `--profile` names, by name in any case or by id, or else on `TILLER_PROFILE`'s, or the one used last. When that profile isn't open, `tiller` opens it, in the background, and when Tiller isn't running it starts Tiller with it, then waits for the profile, up to 40 seconds. `TILLER_SOCKET` names a socket to use instead and turns this off.
+
+```sh
+tiller profiles                    # * marks the one used last; open ones show their tabs
+tiller profile new Work            # creates it and opens it; --no-open only creates it
+tiller profile open Work           # opens it, or brings its window forward
+tiller profile rename Work Office
+tiller profile color Office teal   # or auto for one from its place
+tiller profile label Office 🚀     # no label brings the initials back
+tiller profile move Office 1       # its place along the rail
+tiller profile close Office
+tiller profile delete Office       # moves its folders to the Trash; it has to be closed
+tiller profile-tabs on             # every open profile in one window, with a rail
+tiller tabs --all                  # every open profile's tabs
+tiller --profile work read         # any command, on that profile
+tiller status                      # version, data folder, profiles, app-wide settings
+tiller show                        # brings the window forward
+tiller show agent --chat <id>      # the agent panel, with that chat; --hide hides it
+tiller show downloads              # also: show find <text>, show fullscreen, show settings Agent
+tiller default-browser [--make]    # macOS asks to confirm
+tiller update                      # in released builds
+tiller quit
+```
+
+Profile requests go to any open profile's control socket, which answers for Tiller as a whole (`app.*`). `tiller profiles` reads `profiles.json` when Tiller isn't running.
+
+### Pages and tabs
 
 ```sh
 tiller tabs                        # * marks the selected tab
@@ -65,31 +104,110 @@ tiller type --selector '#q' hi     # CSS selector instead of a ref
 tiller choose 7 "Business"         # a dropdown's option, by label or value
 tiller click 4 --read              # and print the page afterwards
 tiller read --viewport             # only what is on screen
+tiller find "free shipping"        # how often the text appears, with context
 tiller run "Search flights from Zurich to London on 20 September"
 tiller screenshot -o page.jpg      # prints the path; a temp file without -o
+tiller pdf -o page.pdf             # the page as a PDF
 tiller eval 'document.title'
-tiller close 2
-tiller --profile work tabs         # another open profile's tabs
+tiller back                        # also forward, reload and stop
+tiller zoom in                     # in, out or reset; without one, prints the zoom
+tiller dup                         # duplicates the tab, after it
+tiller move 4 1                    # tab 4 to the first place
+tiller close 2                     # --others or --right closes those instead
+tiller closed                      # the recently closed tabs
+tiller reopen                      # the last one, where it was
+tiller source                      # also devtools and print
 ```
 
-| Command | Tool |
+| Command | Tool or request |
 |---|---|
 | `tabs` | `list_tabs` |
 | `new [url] [--background]` | `new_tab` |
 | `select <tab>` | `select_tab` |
-| `close <tab>` | `close_tab` |
+| `close [tab] [--others \| --right]` | `close_tab`, or `tabs.close_others` and `tabs.close_right` |
 | `go <url>` | `navigate` |
+| `back`, `forward`, `reload` | `go_back`, `go_forward`, `reload` |
+| `stop` | `tabs.stop` |
 | `read [--max-chars N] [--viewport]` | `read_page` |
 | `click <ref>` | `click` |
 | `type [ref] <text> [--append] [--submit]` | `type`, into the focused element when no ref or selector is given |
 | `choose <ref> <option>` | `select` |
+| `find <text> [--max-matches N]` | `find_text` |
 | `run <goal> [--max-steps N]` | `run_task`; prints each step, and exits 1 unless the task ends done |
 | `screenshot [-o file]` | `screenshot` |
+| `pdf [-o file]` | DevTools' `Page.printToPDF` |
 | `eval <expression>` | `eval_js` |
+| `zoom [in \| out \| reset]` | `zoom` |
+| `dup [tab] [--background]` | `tabs.duplicate` |
+| `move <tab> <place>` | `tabs.move` |
+| `closed`, `reopen [--background]` | `tabs.closed`, `tabs.reopen` |
+| `source [--background]`, `devtools`, `print` | `tabs.source`, `tabs.devtools`, `tabs.print` |
 
-`--profile <name>` controls that profile instead of the one used last, and takes an id too. The profile has to be open. `--tab <id>` acts on another tab than the selected one, and `--json` prints the raw result instead of text. Options can come before or after the command. `--read` after `click`, `type` or `choose` prints the page afterwards. Refs are stored in the page, so a `read` in one call and a `click` in the next agree. Errors go to stderr with exit code 1, or 2 for bad arguments. Like `tiller_mcp`, it needs Tiller running, with the profile open, and honors `TILLER_SOCKET` and `TILLER_PROFILE`.
+`--tab <id>` acts on another tab than the selected one. `--read` after `click`, `type` or `choose` prints the page afterwards. Refs are stored in the page, so a `read` in one call and a `click` in the next agree.
 
-The tool code is in `mcp/src/browser.rs`. `mcp/src/main.rs` wraps it as MCP and `mcp/src/bin/tiller.rs` as the CLI.
+### History, downloads and settings
+
+```sh
+tiller history                     # the pages visited last; --limit N
+tiller history github              # pages whose address or title has the text
+tiller history top                 # the most visited sites
+tiller history rm https://example.com/
+tiller history clear               # also the recently closed tabs
+tiller downloads                   # this run's, with ids
+tiller downloads cancel 3          # also open, reveal (in the Finder) and clear
+tiller settings                    # every setting, its value and what it takes
+tiller settings get search_engine
+tiller settings set tab_layout vertical
+tiller settings set agent_model.claude opus
+tiller sites                       # camera and microphone choices
+tiller sites set meet.google.com --camera allow --microphone block
+tiller sites rm meet.google.com
+tiller passwords [list github]     # sites and usernames; passwords are never printed
+tiller passwords fill              # fills the page's saved login; --username picks one
+tiller passwords rm github.com --username me
+tiller extensions                  # with their status
+tiller extensions add ~/ext        # a folder or a .crx file
+tiller extensions off "Dark Reader"  # also on, pin, unpin, options and rm, by name or id
+tiller import chrome-profiles
+tiller import chrome --from Work --only history,settings
+```
+
+`settings` covers the General, Agent and Jev panes and the settings every profile shares, which it marks: the homepage, launch and new-tab pages, tab layout and sidebar, tab unloading, search engine and suggestions, full URLs, the agent for new chats and its chat tabs, built-in tools, extra instructions, folder, each CLI's command and each agent's model, effort, context and fast mode, run_task's models, and the theme, appearance, accent, Profile Tabs, remote debugging and, in released builds, updates. Keys, such as providers' and run_task's, stay in Settings, as do custom providers and the agent's shortcut. Switches take `on` or `off`. A Settings window already open may show the old value until its pane is shown again.
+
+The Chrome import asks macOS for your login password to read Chrome's cookies and passwords, and needs Full Disk Access to read Chrome's folder at all; without it, the command says so.
+
+### The agent, skills and scheduled prompts
+
+```sh
+tiller agent send "Summarize this page"   # prints the answer once the turn ends
+tiller agent send --agent codex --effort high "…"
+echo "…" | tiller agent send       # the message from stdin
+tiller agent send --chat <id> "And the next one?"
+tiller agent send --no-wait "…"    # prints the chat's id and leaves it working
+tiller agent chats                 # newest first, with ids; also `tiller agent`
+tiller agent show <id>             # the transcript
+tiller agent status <id>           # also stop and rm
+tiller skills                      # the library's, on or off, then the CLIs' own
+tiller skills add owner/repo       # a folder, a .zip or .skill file, or a Git repository
+tiller skills save my-skill SKILL.md
+tiller skills off my-skill         # also on, show and rm
+tiller schedules
+tiller schedules add "Check my inbox" --weekdays 09:00 --name Inbox --agent claude --tools read
+tiller schedules edit <id> --every 2h
+tiller schedules off <id>          # also on, run and rm
+```
+
+`agent send` sends the message in a new chat that runs in the background, taking no tab, as a scheduled run does, with the agent, model and tools of Settings unless `--agent`, `--model`, `--effort`, `--context`, `--fast` and `--tools` say otherwise. The agent gets the selected tab's details, as a message typed in the panel does. The chat stays in history, so `tiller show agent --chat <id>` opens it in the panel. `--chat` continues a chat with its own agent, model and tools, in its tab if one shows it. While the turn runs, `tiller` says how long it has taken on stderr; once it ends, it prints the agent's last text, and exits 1 unless the turn finished. Leaving `tiller` with Ctrl+C leaves the chat working.
+
+`schedules add` takes the prompt and one of `--every` (minutes, or `30m`, `2h`), `--daily HH:MM`, `--weekdays HH:MM` or `--cron "<expr>"`, with `--off` to save it turned off. From a terminal, a schedule can have any built-in tools; from an agent's chat, the [chat's limits](agent.md#scheduling-from-a-chat) apply.
+
+### From an agent's chat
+
+Agents in the panel can run `tiller` with their shell tool, and get `TILLER_CHAT`, which `tiller` sends with each request. Tiller then answers the browser tools, history search, skills and schedules, with the per-chat limits on schedules, and refuses requests that manage Tiller: profiles, settings, sites, saved logins, extensions, the import, changing history or downloads, adding, turning off or removing skills, the window's panels, and starting or stopping agents. This keeps a page that steers an agent from changing Tiller through it; an agent that can run commands can still do anything you can in a shell.
+
+### How it's wired
+
+`tiller` talks to the profile's control socket like `tiller_mcp`. Requests that outlast the 60 seconds a reply may take, `agent.send`, the Chrome import, adding skills or a CRX file and making Tiller the default browser, answer at once with a job id, and `jobs.wait` answers once the job ends, or after 20 seconds with it still running, so `tiller` asks again. The requests are in `ControlServer.swift`, `AppControl.swift` (Tiller as a whole, extensions and jobs), `ProfileControl.swift` (history, downloads, settings, sites, logins, import) and `BrowserWindowController.swift` (tabs, the window and `agent.*`). The tool code is in `mcp/src/browser.rs`; `mcp/src/main.rs` wraps it as MCP and `mcp/src/bin/tiller/` as the CLI, a module per area.
 
 ## run_task
 

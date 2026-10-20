@@ -223,14 +223,16 @@ final class HistoryStore: @unchecked Sendable {
     /// site's favicon. Of pages that differ only in scheme or "www.", only
     /// the first is kept. `completion` runs on the store's queue. A search
     /// that a newer one replaces before it runs never completes, so typing
-    /// fast doesn't queue up a scan per keystroke.
-    func search(_ text: String, limit: Int, completion: @escaping @Sendable ([HistoryPage]) -> Void) {
-        let number = latestSearch.withLock { latest in
+    /// fast doesn't queue up a scan per keystroke. A search that isn't
+    /// `replaceable`, as the `tiller` CLI's, always completes and replaces
+    /// none.
+    func search(_ text: String, limit: Int, replaceable: Bool = true, completion: @escaping @Sendable ([HistoryPage]) -> Void) {
+        let number = replaceable ? latestSearch.withLock { latest in
             latest += 1
             return latest
-        }
+        } : nil
         queue.async { [db, latestSearch] in
-            guard latestSearch.withLock({ $0 }) == number else { return }
+            if let number, latestSearch.withLock({ $0 }) != number { return }
             let pattern = "%" + text.replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "%", with: "\\%")
                 .replacingOccurrences(of: "_", with: "\\_") + "%"

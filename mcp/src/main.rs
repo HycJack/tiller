@@ -175,6 +175,46 @@ fn tools(jev: &str) -> Value {
             })), "required": ["option"] },
         },
         {
+            "name": "go_back",
+            "description": "Goes back one page in a tab's history and waits for the load.",
+            "inputSchema": { "type": "object", "properties": { "tab_id": tab_id } },
+        },
+        {
+            "name": "go_forward",
+            "description": "Goes forward one page in a tab's history and waits for the load.",
+            "inputSchema": { "type": "object", "properties": { "tab_id": tab_id } },
+        },
+        {
+            "name": "reload",
+            "description": "Reloads a tab and waits for the load.",
+            "inputSchema": { "type": "object", "properties": { "tab_id": tab_id } },
+        },
+        {
+            "name": "find_text",
+            "description": "Counts where a text appears in the page's visible text, ignoring case, and returns the first matches with the text around them. Cheaper than read_page to check for a word.",
+            "inputSchema": { "type": "object", "properties": {
+                "text": { "type": "string" },
+                "max_matches": { "type": "integer", "description": "Most matches to return with their context. Default 10." },
+                "tab_id": tab_id,
+            }, "required": ["text"] },
+        },
+        {
+            "name": "zoom",
+            "description": "Zooms a tab's page in or out, or back to actual size, as Cmd+=, Cmd+- and Cmd+0 do; Tiller keeps the zoom per site. Returns the zoom in percent. Without level, only reports it.",
+            "inputSchema": { "type": "object", "properties": {
+                "level": { "type": "string", "enum": ["in", "out", "reset"] },
+                "tab_id": tab_id,
+            } },
+        },
+        {
+            "name": "search_history",
+            "description": "Searches the user's browsing history in Tiller by URL and title, best matches first, with visit counts and the last visit. Without query, lists the pages visited most recently.",
+            "inputSchema": { "type": "object", "properties": {
+                "query": { "type": "string" },
+                "limit": { "type": "integer", "description": "Most pages to return. Default 25." },
+            } },
+        },
+        {
             "name": "screenshot",
             "description": "Captures the visible part of a tab as a JPEG image.",
             "inputSchema": { "type": "object", "properties": { "tab_id": tab_id } },

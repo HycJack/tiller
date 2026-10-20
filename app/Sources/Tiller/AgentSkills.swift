@@ -593,6 +593,37 @@ enum AgentSkillCatalog {
             } catch {
                 throw ControlError(error.localizedDescription)
             }
+        case "skills.toggle", "skills.remove":
+            guard let name = params["name"] as? String, let index = store.entries.firstIndex(where: { $0.name == name }) else {
+                throw ControlError("no skill \(params["name"] ?? "") in the library. Only the library's skills can be changed.")
+            }
+            if method == "skills.remove" {
+                store.remove(at: IndexSet(integer: index))
+                return ["removed": name]
+            }
+            store.setEnabled(params["on"] as? Bool ?? true, at: index)
+            return ["name": name, "enabled": store.entries[index].enabled]
+        case "skills.add":
+            guard let source = (params["source"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !source.isEmpty else {
+                throw ControlError("add needs a folder, a .zip or .skill file, or a Git repository")
+            }
+            let path = NSString(string: source).expandingTildeInPath
+            var isFolder: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: path, isDirectory: &isFolder)
+            // A clone can take longer than a reply may.
+            let job = ControlJobs.start { finish in
+                Task { @MainActor in
+                    do {
+                        let names = exists
+                            ? try await (isFolder.boolValue ? store.addFolder(path) : store.addArchive(path))
+                            : try await store.addGit(source)
+                        finish(.success(["added": names, "note": "Agents load them when they next start."]))
+                    } catch {
+                        finish(.failure(ControlError(error.localizedDescription)))
+                    }
+                }
+            }
+            return ["job": job]
         default:
             throw ControlError("unknown method \(method)")
         }

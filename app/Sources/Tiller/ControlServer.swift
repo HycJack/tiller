@@ -13,12 +13,18 @@ final class ControlDeferred {
     init(_ start: @escaping (@escaping (Result<Any, ControlError>) -> Void) -> Void) { self.start = start }
 }
 
-/// Answers tiller_mcp's tab requests (list, open, select, navigate, close) and
-/// skill requests (list, read, save), schedule requests (list, save,
-/// delete, run) and run_task's model requests (`jev.*`) for one profile, on its control socket. DevTools calls on the
-/// same socket never reach Swift; the core sends them to the profile's tab
-/// directly. `app.open` opens a profile, for a second launch of Tiller to
-/// pass on what it was asked.
+/// Answers tiller_mcp's and the `tiller` CLI's requests for one profile, on
+/// its control socket: tabs (`tabs.*`), skills, schedules, run_task's model
+/// requests (`jev.*`), the agent panel (`agent.*`), history, downloads,
+/// settings, sites and passwords, and requests about Tiller as a whole
+/// (`app.*`, in `AppControl`), which any open profile's socket takes.
+/// DevTools calls on the same socket never reach Swift; the core sends them
+/// to the profile's tab directly. `app.open` opens a profile, for a second
+/// launch of Tiller to pass on what it was asked.
+///
+/// A request from an agent's chat carries the chat's id in `chat`, from
+/// TILLER_CHAT. Such requests may use the browser tools, skills and
+/// schedules, but not the requests that manage Tiller (see `isManagement`).
 @MainActor
 final class ControlServer {
     private weak var profile: ProfileContext?
@@ -56,9 +62,19 @@ final class ControlServer {
                 guard let request = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
                     let method = request["method"] as? String
                 else { throw ControlError("request needs a method") }
-                let params = request["params"] as? [String: Any] ?? [:]
+                var params = request["params"] as? [String: Any] ?? [:]
+                let chat = (request["chat"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                if chat != nil, Self.isManagement(method) {
+                    throw ControlError("\(method) manages Tiller, which an agent's chat can't do. Ask the user to run it from Terminal or do it in Tiller.")
+                }
+                // The person at a terminal may give a schedule any tools.
+                if method.hasPrefix("schedules."), chat == nil, request["user"] as? Bool == true, params["chat"] == nil {
+                    params["user"] = true
+                }
                 if method == "app.open" {
                     result = try Self.openProfile(params)
+                } else if method.hasPrefix("app.") || method.hasPrefix("extensions.") || method.hasPrefix("jobs.") {
+                    result = try AppControl.control(method, params: params, profile: profile)
                 } else {
                     guard let profile else { throw ControlError("the profile was closed") }
                     if method.hasPrefix("skills.") {
@@ -67,6 +83,8 @@ final class ControlServer {
                         result = try AgentScheduleControl.control(method, params: params, profile: profile)
                     } else if method.hasPrefix("jev.") {
                         result = try JevControl.control(method, params: params, profile: profile)
+                    } else if ProfileControl.handles(method) {
+                        result = try ProfileControl.control(method, params: params, profile: profile)
                     } else {
                         guard let browser = profile.window else { throw ControlError("no browser window is open") }
                         result = try browser.control(method, params: params)
@@ -89,6 +107,22 @@ final class ControlServer {
                 Self.send(["result": result], token: token)
             }
         }
+    }
+
+    /// Requests an agent's chat may not make: those that change Tiller's
+    /// profiles, settings, passwords, sites, extensions, history or
+    /// downloads, import data, change the skill library outside save_skill,
+    /// or start and stop agents. Reading tabs, pages, skills, schedules and
+    /// history stays open to agents, as do the per-chat limits on schedules.
+    static func isManagement(_ method: String) -> Bool {
+        let open: Set<String> = [
+            "app.status", "app.profiles", "jobs.wait", "history.search", "history.recent", "history.top",
+            "downloads.list", "settings.get", "agent.chats", "agent.transcript", "agent.status",
+        ]
+        if open.contains(method) { return false }
+        let managed = ["app.", "extensions.", "history.", "downloads.", "settings.", "sites.", "passwords.", "import.", "agent.", "window."]
+        if managed.contains(where: method.hasPrefix) { return true }
+        return ["skills.toggle", "skills.remove", "skills.add", "tabs.fill_password"].contains(method)
     }
 
     /// Opens the profile `profile` names by id or name, or the one used

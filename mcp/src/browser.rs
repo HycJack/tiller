@@ -6,8 +6,10 @@ use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Write},
     os::unix::net::UnixStream,
+    path::PathBuf,
+    process::Command,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// How long navigate, new_tab and click wait for a page to finish loading.
@@ -22,6 +24,27 @@ const ACTION_GRACE_MS: u64 = 250;
 /// as it is. Long enough for the new page to show; a page still fetching
 /// images or ads is worth reading already.
 pub(crate) const READ_LOAD_WAIT: Duration = Duration::from_secs(3);
+
+/// How long opening a closed profile, or starting Tiller for it, may take
+/// before its control socket answers.
+const OPEN_TIMEOUT: Duration = Duration::from_secs(40);
+
+/// Counts a text's matches in the page, case-insensitively, with a little of
+/// the text around the first ones, as `(text, max) => result`.
+const FIND_JS: &str = r#"(text, max) => {
+  const body = document.body ? document.body.innerText : "";
+  const hay = body.toLowerCase(), needle = text.toLowerCase();
+  const matches = [];
+  let count = 0;
+  for (let at = hay.indexOf(needle); needle && at >= 0; at = hay.indexOf(needle, at + needle.length)) {
+    count++;
+    if (matches.length < max) {
+      const start = Math.max(0, at - 60), end = Math.min(body.length, at + needle.length + 60);
+      matches.push((start > 0 ? "…" : "") + body.slice(start, end).replace(/\s+/g, " ").trim() + (end < body.length ? "…" : ""));
+    }
+  }
+  return { query: text, count, matches };
+}"#;
 
 /// The script that reads and acts on pages, as `(op, arg) => result`.
 pub(crate) const PAGE_JS: &str = include_str!("page.js");
@@ -42,11 +65,20 @@ pub struct Browser {
     pub profile: Option<String>,
     /// Tells a long call, such as run_task, that it has been cancelled.
     pub cancelled: Option<Box<dyn Fn() -> bool>>,
+    /// Set by the `tiller` CLI: requests without TILLER_CHAT come from the
+    /// person at the terminal, who may give a schedule any tools.
+    pub user: bool,
     conn: Option<(UnixStream, BufReader<UnixStream>)>,
     next_id: u64,
 }
 
 impl Browser {
+    /// A browser for the `tiller` CLI, talking to `profile`'s Tiller, or
+    /// the one used last.
+    pub fn for_user(profile: Option<String>) -> Browser {
+        Browser { profile, user: true, ..Default::default() }
+    }
+
     pub fn call_tool(&mut self, name: &str, args: &Value) -> Result<Output, String> {
         let tab = args["tab_id"].as_i64();
         match name {
@@ -61,6 +93,43 @@ impl Browser {
                 json_out(self.wait_for_load(id)?)
             }
             "select_tab" => json_out(self.request("tabs.select", json!({ "tab_id": tab.ok_or("tab_id is required")? }))?),
+            "go_back" | "go_forward" => {
+                let id = self.resolve(tab)?;
+                let method = if name == "go_back" { "tabs.back" } else { "tabs.forward" };
+                self.request(method, json!({ "tab_id": id }))?;
+                json_out(self.wait_for_load(id)?)
+            }
+            "reload" => {
+                let id = self.resolve(tab)?;
+                self.request("tabs.reload", json!({ "tab_id": id }))?;
+                json_out(self.wait_for_load(id)?)
+            }
+            "find_text" => {
+                let id = self.resolve(tab)?;
+                let text = args["text"].as_str().filter(|t| !t.is_empty()).ok_or("text is required")?;
+                let max = args["max_matches"].as_u64().unwrap_or(10);
+                self.wait_if_loading(id)?;
+                json_out(self.evaluate(id, &format!("({FIND_JS})({}, {max})", json!(text)))?)
+            }
+            "zoom" => {
+                let id = self.resolve(tab)?;
+                let mut params = json!({ "tab_id": id });
+                match args["level"].as_str() {
+                    None | Some("") => {}
+                    Some("in") => params["step"] = json!(1),
+                    Some("out") => params["step"] = json!(-1),
+                    Some("reset") => params["step"] = json!(0),
+                    Some(other) => return Err(format!("level is in, out or reset, not {other:?}")),
+                }
+                json_out(self.request("tabs.zoom", params)?)
+            }
+            "search_history" => {
+                let limit = args["limit"].as_u64().unwrap_or(25);
+                json_out(match args["query"].as_str().filter(|q| !q.is_empty()) {
+                    Some(query) => self.request("history.search", json!({ "query": query, "limit": limit }))?,
+                    None => self.request("history.recent", json!({ "limit": limit }))?,
+                })
+            }
             "close_tab" => json_out(self.request("tabs.close", json!({ "tab_id": tab.ok_or("tab_id is required")? }))?),
             "navigate" => {
                 let url = args["url"].as_str().ok_or("url is required")?;
@@ -196,7 +265,7 @@ impl Browser {
     /// The given tab, or the selected one, loaded. A tab that wasn't loaded,
     /// one restored at launch or unloaded to save memory, loads its page
     /// first. Only this tab: listing every tab doesn't load them.
-    fn resolve(&mut self, tab: Option<i64>) -> Result<i64, String> {
+    pub fn resolve(&mut self, tab: Option<i64>) -> Result<i64, String> {
         let info = self.request("tabs.resolve", json!({ "tab_id": tab }))?;
         let id = info["id"].as_i64().ok_or("the app did not return a tab id")?;
         if info["started"] == true {
@@ -223,7 +292,7 @@ impl Browser {
     /// Waits until the tab stops loading, then returns its info. The app
     /// answers when the load ends, or once half a second passes with none
     /// starting.
-    fn wait_for_load(&mut self, id: i64) -> Result<Value, String> {
+    pub fn wait_for_load(&mut self, id: i64) -> Result<Value, String> {
         self.wait_for_load_within(id, 500)
     }
 
@@ -323,13 +392,13 @@ impl Browser {
         Ok(reply["result"].get("value").cloned().unwrap_or(Value::Null))
     }
 
-    pub(crate) fn cdp(&mut self, id: i64, method: &str, params: Value) -> Result<Value, String> {
+    pub fn cdp(&mut self, id: i64, method: &str, params: Value) -> Result<Value, String> {
         self.request("cdp", json!({ "tab_id": id, "method": method, "params": params }))
     }
 
     /// One request to the app. Retries once on a fresh connection, in case the
     /// app restarted since the last call.
-    pub(crate) fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    pub fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         match self.try_request(method, &params) {
             Err(Failure::Connection(_)) => {
                 self.conn = None;
@@ -349,6 +418,79 @@ impl Browser {
         })
     }
 
+    /// A request whose answer may be a job, as `{"job": id}`, that outlasts
+    /// one reply: waits on the job, calling `progress` with the seconds so
+    /// far each time a wait passes with it still running, and returns its
+    /// result. Other answers come back as they are.
+    pub fn request_and_wait(&mut self, method: &str, params: Value, mut progress: impl FnMut(f64)) -> Result<Value, String> {
+        let reply = self.request(method, params)?;
+        let Some(job) = reply["job"].as_str().map(str::to_owned) else { return Ok(reply) };
+        loop {
+            if self.is_cancelled() {
+                return Err("cancelled".into());
+            }
+            let state = self.request("jobs.wait", json!({ "id": job, "timeout_ms": 20_000 }))?;
+            match state["status"].as_str() {
+                Some("done") => {
+                    let mut result = state["result"].clone();
+                    // What the first answer said, such as the chat's id, stays.
+                    if let (Some(result), Some(first)) = (result.as_object_mut(), reply.as_object()) {
+                        for (key, value) in first {
+                            if key != "job" {
+                                result.entry(key.clone()).or_insert_with(|| value.clone());
+                            }
+                        }
+                    }
+                    return Ok(result);
+                }
+                Some("failed") => return Err(state["error"].as_str().unwrap_or("the job failed").to_string()),
+                _ => progress(state["seconds"].as_f64().unwrap_or_default()),
+            }
+        }
+    }
+
+    /// Makes sure the profile this browser talks to is open: if its socket
+    /// doesn't answer, asks a running Tiller to open it, or starts Tiller
+    /// with it, and waits for its socket. With TILLER_SOCKET set, or a data
+    /// folder from before profiles, there is nothing to open. Returns
+    /// whether it had to open the profile.
+    pub fn ensure_open(&mut self) -> Result<bool, String> {
+        if env_var("TILLER_SOCKET").is_some() {
+            return Ok(false);
+        }
+        let Some(list) = ProfileList::read()? else {
+            // No profiles yet: a Tiller from before profiles, which keeps its
+            // socket in the root folder, or none that has run. That one
+            // makes the list as it starts.
+            if UnixStream::connect(format!("{}/control.sock", ProfileList::root())).is_ok() {
+                return Ok(false);
+            }
+            self.conn = None;
+            launch(None)?;
+            let profile = self.profile.clone();
+            wait_until(|| {
+                Ok(ProfileList::read()?.is_some_and(|list| list.resolve(profile.as_deref()).is_ok_and(|id| list.is_open(&id))))
+            })?;
+            return Ok(true);
+        };
+        let id = list.resolve(self.profile.as_deref())?;
+        if list.is_open(&id) {
+            return Ok(false);
+        }
+        self.conn = None;
+        // Any open profile's socket takes app requests.
+        let running = list.ids().into_iter().find(|other| *other != id && list.is_open(other));
+        match running {
+            Some(other) => {
+                let mut via = Browser { profile: Some(other), user: self.user, ..Default::default() };
+                via.request("app.profile.open", json!({ "profile": id, "show": false }))?;
+            }
+            None => launch(Some(&id))?,
+        }
+        wait_until(|| Ok(list.is_open(&id))).map_err(|_| format!("Tiller didn't open the profile {id} within {} seconds", OPEN_TIMEOUT.as_secs()))?;
+        Ok(true)
+    }
+
     fn try_request(&mut self, method: &str, params: &Value) -> Result<Value, Failure> {
         if self.conn.is_none() {
             let path = socket_path(self.profile.as_deref()).map_err(Failure::App)?;
@@ -362,8 +504,16 @@ impl Browser {
         let (stream, reader) = self.conn.as_mut().unwrap();
         self.next_id += 1;
         // One write per request. Formatting straight into the socket would
-        // make a system call of every token.
-        let mut line = json!({ "id": self.next_id, "method": method, "params": params }).to_string();
+        // make a system call of every token. The chat an agent's request
+        // comes from goes with it, which the app holds management requests
+        // back from.
+        let mut request = json!({ "id": self.next_id, "method": method, "params": params });
+        match std::env::var("TILLER_CHAT") {
+            Ok(chat) if !chat.is_empty() => request["chat"] = json!(chat),
+            _ if self.user => request["user"] = json!(true),
+            _ => {}
+        }
+        let mut line = request.to_string();
         line.push('\n');
         stream.write_all(line.as_bytes()).map_err(|e| Failure::Connection(e.to_string()))?;
         loop {
@@ -400,43 +550,126 @@ enum Failure {
     Timeout(String),
 }
 
+fn env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
 /// TILLER_SOCKET, or `control.sock` in the folder of the profile named by
 /// `profile` or TILLER_PROFILE (an id or a name), else of the one used last.
-/// Profiles are listed in `profiles.json` in the root folder, which is
-/// TILLER_DATA_DIR or the app's folder, as in Profile.swift.
 fn socket_path(profile: Option<&str>) -> Result<String, String> {
-    let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
-    if let Some(path) = var("TILLER_SOCKET") {
+    if let Some(path) = env_var("TILLER_SOCKET") {
         return Ok(path);
     }
-    let root = var("TILLER_DATA_DIR").unwrap_or_else(|| {
-        format!("{}/Library/Application Support/Tiller", std::env::var("HOME").unwrap_or_default())
-    });
-    let wanted = profile.map(str::to_owned).or_else(|| var("TILLER_PROFILE"));
-    let list: Value = match std::fs::read(format!("{root}/profiles.json")) {
-        Ok(data) => serde_json::from_slice(&data).unwrap_or(Value::Null),
+    match ProfileList::read()? {
+        Some(list) => Ok(list.socket(&list.resolve(profile)?)),
         // A Tiller from before profiles keeps its socket in the root folder.
-        Err(_) if wanted.is_none() => return Ok(format!("{root}/control.sock")),
-        Err(e) => return Err(format!("can't read the profiles in {root}: {e}")),
-    };
-    let profiles = list["profiles"].as_array().map(Vec::as_slice).unwrap_or_default();
-    let id = match &wanted {
-        Some(wanted) => {
-            let lower = wanted.to_lowercase();
-            let found = profiles.iter().find(|p| p["id"] == wanted.as_str()).or_else(|| {
-                profiles.iter().find(|p| p["name"].as_str().is_some_and(|name| name.to_lowercase() == lower))
-            });
-            match found.and_then(|p| p["id"].as_str()) {
-                Some(id) => id,
-                None => {
-                    let names: Vec<&str> = profiles.iter().filter_map(|p| p["name"].as_str()).collect();
-                    return Err(format!("no profile named {wanted:?}. Profiles: {}", names.join(", ")));
-                }
+        None => Ok(format!("{}/control.sock", ProfileList::root())),
+    }
+}
+
+/// `profiles.json` in the root folder, which is TILLER_DATA_DIR or the
+/// app's folder, as in Profile.swift.
+pub struct ProfileList {
+    root: String,
+    list: Value,
+}
+
+impl ProfileList {
+    pub fn root() -> String {
+        env_var("TILLER_DATA_DIR")
+            .unwrap_or_else(|| format!("{}/Library/Application Support/Tiller", std::env::var("HOME").unwrap_or_default()))
+    }
+
+    /// The list, or None when there is none and no profile was asked for:
+    /// a Tiller from before profiles.
+    pub fn read() -> Result<Option<ProfileList>, String> {
+        let root = Self::root();
+        match std::fs::read(format!("{root}/profiles.json")) {
+            Ok(data) => Ok(Some(ProfileList { list: serde_json::from_slice(&data).unwrap_or(Value::Null), root })),
+            Err(_) if env_var("TILLER_PROFILE").is_none() => Ok(None),
+            Err(e) => Err(format!("can't read the profiles in {root}: {e}")),
+        }
+    }
+
+    pub fn profiles(&self) -> &[Value] {
+        self.list["profiles"].as_array().map(Vec::as_slice).unwrap_or_default()
+    }
+
+    fn ids(&self) -> Vec<String> {
+        self.profiles().iter().filter_map(|p| p["id"].as_str().map(str::to_owned)).collect()
+    }
+
+    pub fn last_used(&self) -> Option<&str> {
+        self.list["lastUsed"].as_str()
+    }
+
+    /// Whether the profile's socket answers.
+    pub fn is_open(&self, id: &str) -> bool {
+        UnixStream::connect(self.socket(id)).is_ok()
+    }
+
+    pub fn socket(&self, id: &str) -> String {
+        format!("{}/Profiles/{id}/control.sock", self.root)
+    }
+
+    /// The id of the profile `profile` or TILLER_PROFILE names, by id or by
+    /// name in any case, else of the one used last.
+    pub fn resolve(&self, profile: Option<&str>) -> Result<String, String> {
+        let profiles = self.profiles();
+        let wanted = profile.map(str::to_owned).or_else(|| env_var("TILLER_PROFILE"));
+        let Some(wanted) = wanted else {
+            return Ok(self.last_used().or_else(|| profiles.first().and_then(|p| p["id"].as_str())).unwrap_or("default").to_string());
+        };
+        let lower = wanted.to_lowercase();
+        let found = profiles.iter().find(|p| p["id"] == wanted.as_str()).or_else(|| {
+            profiles.iter().find(|p| p["name"].as_str().is_some_and(|name| name.to_lowercase() == lower))
+        });
+        match found.and_then(|p| p["id"].as_str()) {
+            Some(id) => Ok(id.to_string()),
+            None => {
+                let names: Vec<&str> = profiles.iter().filter_map(|p| p["name"].as_str()).collect();
+                Err(format!("no profile named {wanted:?}. Profiles: {}", names.join(", ")))
             }
         }
-        None => list["lastUsed"].as_str().or_else(|| profiles.first().and_then(|p| p["id"].as_str())).unwrap_or("default"),
+    }
+}
+
+/// Checks `done` every 200 ms until it says so, for at most OPEN_TIMEOUT.
+fn wait_until(mut done: impl FnMut() -> Result<bool, String>) -> Result<(), String> {
+    let deadline = Instant::now() + OPEN_TIMEOUT;
+    while !done()? {
+        if Instant::now() > deadline {
+            return Err(format!("Tiller didn't start within {} seconds", OPEN_TIMEOUT.as_secs()));
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    Ok(())
+}
+
+/// Starts Tiller, with the profile `id` if given, in the background. The
+/// app is the one this tool ships in, else whichever Tiller macOS finds.
+fn launch(id: Option<&str>) -> Result<(), String> {
+    let app = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.canonicalize().ok())
+        .and_then(|exe| exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(PathBuf::from));
+    let mut open = Command::new("/usr/bin/open");
+    open.arg("-g");
+    if let Some(dir) = env_var("TILLER_DATA_DIR") {
+        open.arg("--env").arg(format!("TILLER_DATA_DIR={dir}"));
+    }
+    match &app {
+        Some(app) => open.arg(app),
+        None => open.args(["-a", "Tiller"]),
     };
-    Ok(format!("{root}/Profiles/{id}/control.sock"))
+    if let Some(id) = id {
+        open.args(["--args", "-profile", id]);
+    }
+    let status = open.status().map_err(|e| format!("couldn't start Tiller: {e}"))?;
+    if !status.success() {
+        return Err("couldn't start Tiller; open it and try again".into());
+    }
+    Ok(())
 }
 
 fn json_out(value: Value) -> Result<Output, String> {

@@ -1141,6 +1141,18 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         send(schedule.prompt, contextOverride: Self.scheduledContext(schedule.name), schedule: schedule)
     }
 
+    /// Sends `text` for `tiller agent send`, with the selected tab's details
+    /// as a typed message has. `completion` gets how its turn ended, once.
+    func runPrompt(_ text: String, completion: @escaping (AgentRunOutcome) -> Void) {
+        runCompletion = completion
+        send(text)
+    }
+
+    /// Stops the running turn, as Escape does.
+    func stop() {
+        stopTurn()
+    }
+
     private func finishRun(_ outcome: AgentRunOutcome) {
         guard let completion = runCompletion else { return }
         runCompletion = nil

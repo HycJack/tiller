@@ -66,7 +66,7 @@ Ask the agent to do something every morning, every hour or at a later time, and 
 - A chat can't change the prompt, agent or tools of a schedule that has built-in tools the chat lacks. It can still rename it, change when it runs, turn it on or off, run it or delete it.
 - A chat a schedule started can list schedules but not save, delete or run them, so a run can't make more runs. That holds for later messages in that chat too.
 
-Tiller tells which chat a call comes from by the chat's id, which `tiller_mcp` gets in `TILLER_CHAT`. Calls without one count as a chat with no built-in tools.
+Tiller tells which chat a call comes from by the chat's id, which `tiller_mcp` gets in `TILLER_CHAT`. Calls without one count as a chat with no built-in tools, except the [`tiller` command-line tool](tools.md#command-line-tool)'s from a terminal, which may give a schedule any tools.
 
 Prompts run only while the profile is open in Tiller. One that came due while Tiller was closed or the Mac slept runs once, a few seconds after launch or on wake, and then follows its rule again. They are kept in `agent-schedules.json` in the [profile's folder](settings-and-data.md#data-folder).
 

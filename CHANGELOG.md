@@ -9,6 +9,23 @@ beta shows what `## Unreleased` holds at the time.
 
 - On the start page, recently closed tabs with long titles line up with
   the others again.
+- The `tiller` command-line tool does what Tiller's menus and Settings do.
+  `tiller profile` lists, opens, creates, renames, colors, labels, moves,
+  closes and deletes profiles, and `--profile` opens a closed profile, or
+  starts Tiller, before it acts. New commands go back and forward, reload,
+  stop, find text, zoom, save a PDF, duplicate, move and reopen tabs, close
+  other tabs, and show the page's source or Developer Tools. `tiller
+  history`, `downloads`, `settings`, `sites`, `passwords`, `extensions` and
+  `import chrome` manage those, `tiller agent send` sends a message to an
+  agent and prints its answer, `tiller skills` and `tiller schedules`
+  manage the skill library and scheduled prompts, and `tiller show` brings
+  up the agent panel, downloads, the find bar or a Settings pane. `tiller
+  <area> --help` lists an area's commands.
+- An agent's chat that runs `tiller` can still use the browser, history
+  search, skills and schedules, but Tiller refuses its requests to manage
+  profiles, settings, logins, extensions and the rest.
+- Agents get six more browser tools: back, forward, reload, finding text in
+  the page, zoom and history search.
 
 ## 0.4.0
 

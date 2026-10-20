@@ -84,6 +84,8 @@ tiller read                 # page text with numbered links, buttons and fields
 tiller click 3
 tiller type 5 "hello" --submit
 tiller run "Find one-way flights from Zurich to London on 20 September"
+tiller --profile work history github  # what the menus and Settings do, by area
+tiller agent send "Summarize this page"
 ```
 
 See [Browser tools](docs/tools.md) for every tool, command and option.

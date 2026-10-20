@@ -29,8 +29,9 @@ final class AgentPanelView: NSView {
     private let chatArea = NSView()
     private let tabBar = AgentTabBar()
     private var chats: [AgentChatView] = []
-    /// Scheduled runs going on in the background. They take no tab until
-    /// opened, and leave once their turn ends.
+    /// Scheduled runs and chats sent from the `tiller` CLI going on in the
+    /// background. They take no tab until opened, and leave once their turn
+    /// ends.
     private var scheduledChats: [AgentChatView] = []
     private var activeIndex = 0
     private var active: AgentChatView { chats[activeIndex] }
@@ -494,6 +495,70 @@ final class AgentPanelView: NSView {
         }
         refresh()
         return id
+    }
+
+    // MARK: Command line
+
+    /// Sends `text` for `tiller agent send`: in the chat `chat` names, which
+    /// a tab may show, or else in a new chat with `kind`, `tools` and
+    /// `options`, in the background like a scheduled run, taking no tab.
+    /// `completion` gets how the turn ended. Returns the chat's id.
+    func runFromCommandLine(
+        _ text: String, chat id: String?, kind: AgentChoice?, tools: [AgentTool]?, options: AgentModelOptions?,
+        completion: @escaping (AgentRunOutcome) -> Void
+    ) throws -> String {
+        let chat: AgentChatView
+        var background = false
+        if let id {
+            if let open = (chats + scheduledChats).first(where: { $0.id == id }) {
+                guard !open.isBusy else { throw ControlError("that chat is working; wait for it, or stop it with `tiller agent stop`") }
+                chat = open
+            } else {
+                guard let conversation = profile.agentHistory.conversation(id) else {
+                    throw ControlError("no chat with id \(id). Run `tiller agent chats` for the list.")
+                }
+                chat = AgentChatView(profile: profile, conversation: conversation)
+                background = true
+            }
+        } else {
+            if let kind, !profile.providers.exists(kind) { throw ControlError("\(kind.rawValue) isn't an agent here") }
+            chat = AgentChatView(profile: profile, kind: kind, tools: tools, modelOptions: options)
+            background = true
+        }
+        if background {
+            attach(chat)
+            scheduledChats.append(chat)
+        }
+        chat.runPrompt(text) { [weak self, weak chat] outcome in
+            completion(outcome)
+            guard background, let self, let chat, let index = self.scheduledChats.firstIndex(of: chat) else { return }
+            self.scheduledChats.remove(at: index)
+            chat.shutDown()
+            chat.removeFromSuperview()
+            self.refresh()
+        }
+        refresh()
+        return chat.id
+    }
+
+    /// Stops the chat's turn, in a tab or in the background. False when no
+    /// such chat is working.
+    func stopChat(_ id: String) -> Bool {
+        guard let chat = (chats + scheduledChats).first(where: { $0.id == id }), chat.isBusy else { return false }
+        chat.stop()
+        return true
+    }
+
+    /// Where the chat is open: the panel tab's number from 1, 0 for the
+    /// background, nil when it isn't.
+    func place(of id: String) -> Int? {
+        if let index = chats.firstIndex(where: { $0.id == id }) { return index + 1 }
+        return scheduledChats.contains { $0.id == id } ? 0 : nil
+    }
+
+    /// Removes the chat from history, as its menu's Delete does.
+    func deleteChat(_ id: String) {
+        delete(id)
     }
 }
 
