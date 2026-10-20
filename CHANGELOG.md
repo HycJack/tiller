@@ -7,6 +7,8 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+## 0.4.1
+
 - On the start page, recently closed tabs with long titles line up with
   the others again.
 - The `tiller` command-line tool does what Tiller's menus and Settings do.
