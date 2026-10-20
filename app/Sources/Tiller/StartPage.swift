@@ -502,13 +502,15 @@ private final class ClosedTabRow: ClickableView {
         title.font = .systemFont(ofSize: Theme.FontSize.body)
         title.lineBreakMode = .byTruncatingTail
         // A long address truncates before the title does, which would
-        // otherwise shrink away to nothing beside it.
-        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // otherwise shrink away to nothing beside it. Both stay below the
+        // list's inset, which NSStackView holds at just under 250, so a long
+        // title truncates rather than pushing its row out to the left.
+        title.setContentCompressionResistancePriority(.defaultLow - 1, for: .horizontal)
         let address = NSTextField(labelWithString: HistoryStore.bare(tab.url))
         address.font = .systemFont(ofSize: Theme.FontSize.secondary)
         address.textColor = Theme.secondaryText
         address.lineBreakMode = .byTruncatingTail
-        address.setContentCompressionResistancePriority(.defaultLow - 1, for: .horizontal)
+        address.setContentCompressionResistancePriority(.defaultLow - 2, for: .horizontal)
         let stack = NSStackView(views: [icon, title, address])
         stack.spacing = 8
         stack.setCustomSpacing(10, after: icon)

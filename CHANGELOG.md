@@ -7,6 +7,9 @@ beta shows what `## Unreleased` holds at the time.
 
 ## Unreleased
 
+- On the start page, recently closed tabs with long titles line up with
+  the others again.
+
 ## 0.4.0
 
 - Tiller now passes as Chrome to sites that check the browser, such as
