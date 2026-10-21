@@ -642,6 +642,9 @@ final class ToolRowView: NSView, TranscriptRow {
                 self.showHeading()
             }
         }
+        // A second's count needn't land on the dot; leeway lets the system
+        // batch the wakeups.
+        ticker?.tolerance = 0.1
     }
 
     func fit(width: CGFloat) {
@@ -1238,6 +1241,7 @@ final class ThinkingRowView: NSView {
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+        timer?.tolerance = 0.1
     }
 
     private func tick() {

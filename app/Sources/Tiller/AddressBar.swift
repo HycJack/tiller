@@ -290,10 +290,11 @@ private final class CapsuleContentView: NSView {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        // Light glass over a light titlebar all but disappears, so at rest
-        // the capsule keeps a faint fill and edge to show where to type.
+        // Glass over a titlebar of much the same shade all but disappears,
+        // so at rest the capsule keeps a faint edge, and in light mode a
+        // faint fill, to show where to type.
         let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let width = isFocused || !dark ? Theme.hairlineWidth : 0
+        let width = Theme.hairlineWidth
         let color = isFocused ? Theme.accent(Theme.Accent.outline) : Theme.fill(0.07)
         let fill = dark || isFocused ? NSColor.clear : Theme.fill(0.03)
         withEasing {

@@ -92,15 +92,56 @@ final class MediaPermissionBar: NSView {
             glass.bottomAnchor.constraint(equalTo: bottomAnchor),
             glass.leadingAnchor.constraint(equalTo: leadingAnchor),
             glass.trailingAnchor.constraint(equalTo: trailingAnchor),
-            glass.widthAnchor.constraint(greaterThanOrEqualToConstant: 300),
+            glass.widthAnchor.constraint(greaterThanOrEqualToConstant: 280),
         ])
-        // Narrows when the page is too narrow to hold it.
+        // Narrows when the page is too narrow to hold it. Below the split
+        // view's holding priorities, so it never widens the page and pushes
+        // the sidebar or the agent panel aside.
         let width = glass.widthAnchor.constraint(equalToConstant: 440)
-        width.priority = .defaultHigh
+        width.priority = .init(255)
         width.isActive = true
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    // MARK: Narrow pages
+
+    private var answerButtons: [NSButton] { [blockButton, allowOnceButton, allowButton, settingsButton] }
+
+    /// The page width under which regular buttons no longer fit side by
+    /// side: theirs, the spacing, and the card's and the page's margins.
+    private lazy var compactBelow: CGFloat = {
+        let buttons = [blockButton, allowOnceButton, allowButton]
+        return buttons.reduce(0) { $0 + $1.fittingSize.width } + 3 * 8 + 24 + 2 * Theme.Padding.panel
+    }()
+
+    private var isCompact = false {
+        didSet {
+            guard isCompact != oldValue else { return }
+            let size: NSControl.ControlSize = isCompact ? .small : .regular
+            for button in answerButtons {
+                button.controlSize = size
+                button.font = .systemFont(ofSize: NSFont.systemFontSize(for: size))
+            }
+        }
+    }
+
+    // Follows the page's width, as the bar at its narrowest doesn't change
+    // size of its own when the page does.
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: nil)
+        guard let superview else { return }
+        superview.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(pageResized), name: NSView.frameDidChangeNotification, object: superview)
+        pageResized()
+    }
+
+    @objc private func pageResized() {
+        guard let width = superview?.bounds.width else { return }
+        isCompact = width < compactBelow
+    }
 
     func show(_ content: Content) {
         self.content = content

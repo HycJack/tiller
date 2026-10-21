@@ -1156,7 +1156,29 @@ final class AgentChatView: NSView, NSTextViewDelegate {
             finishRun(.failed(message ?? "\(profile.providers.displayName(choice)) stopped."))
             turnEnded(finished: false)
         }
-        if follow { scrollToBottom() } else { updateScrollDownButtonAfterLayout() }
+        settleScroll(follow: follow)
+    }
+
+    /// Whether the events handled since the last settle had the newest
+    /// message in view, or nil when none are waiting.
+    private var pendingFollow: Bool?
+
+    /// Scrolls to the newest message, or checks the scroll-down button, once
+    /// the events that came in together are all handled, so a burst of tool
+    /// calls lays the chat out once rather than once per event.
+    private func settleScroll(follow: Bool) {
+        if let pending = pendingFollow {
+            pendingFollow = pending || follow
+            return
+        }
+        pendingFollow = follow
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let follow = self.pendingFollow else { return }
+                self.pendingFollow = nil
+                if follow { self.scrollToBottom() } else { self.updateScrollDownButtonAfterLayout() }
+            }
+        }
     }
 
     /// New output below the visible part grows the transcript without moving

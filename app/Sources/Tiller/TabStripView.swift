@@ -98,7 +98,7 @@ final class TabStripView: NSView {
             added.append(item)
             return item
         }
-        existing.values.forEach { $0.removeFromSuperview() }
+        existing.values.forEach { $0.leave() }
         selectedItem = items.first { $0.tab === selected }
         if selectedItem !== selectedBefore { userScrolled = false }
         if !added.isEmpty {
@@ -583,6 +583,20 @@ final class TabItemView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
 
     @objc private func closeClicked() { onClose?() }
+
+    /// Closed, so fading out of the row while the others close up. It
+    /// takes no more clicks meanwhile, which would act on a closed tab.
+    private var isLeaving = false
+
+    fileprivate func leave() {
+        isLeaving = true
+        onSelect = nil
+        onClose = nil
+        setAccessibilityElement(false)
+        fadeOut(self, Theme.Duration.quick) { [weak self] in self?.removeFromSuperview() }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { isLeaving ? nil : super.hitTest(point) }
 
     // MARK: Accessibility
 

@@ -515,6 +515,24 @@ extension NSView {
         layer?.add(fade, forKey: "fadeUp")
     }
 
+    /// Eases the view's layer down into place from `distance` points above
+    /// it, as a floating bar does while it fades in, so it reads as dropping
+    /// in rather than appearing. Nothing under Reduce Motion.
+    @MainActor
+    func dropIn(distance: CGFloat = 6, duration: TimeInterval = Theme.Duration.panel) {
+        guard !Theme.reduceMotion, window != nil else { return }
+        wantsLayer = true
+        guard let layer else { return }
+        // Up is +y unless the layer above is drawn flipped.
+        let up: CGFloat = layer.superlayer?.contentsAreFlipped() == true ? -1 : 1
+        let drop = CABasicAnimation(keyPath: "transform.translation.y")
+        drop.fromValue = distance * up
+        drop.toValue = 0
+        drop.duration = duration
+        drop.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+        layer.add(drop, forKey: "dropIn")
+    }
+
     /// A small pop as the view's layer appears or changes to mark a moment,
     /// such as a check after Copy: it scales up from `from` with a little
     /// overshoot. Nothing under Reduce Motion.

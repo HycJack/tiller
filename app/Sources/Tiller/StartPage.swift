@@ -10,6 +10,8 @@ final class StartPageView: NSView {
 
     private let content = NSStackView()
     private let heading = StartPageView.heading("Frequently Visited")
+    /// The heading's inset from the tiles' column, which a lone tile drops.
+    private var headingInset: NSLayoutConstraint!
     private let grid = NSGridView()
     private let closedHeading = StartPageView.heading("Recently Closed")
     private let closedList = NSStackView()
@@ -25,6 +27,9 @@ final class StartPageView: NSView {
     private var shownHistoryVersion = -1
 
     private static let columns = 4
+    /// The columns the page has room for, up to `columns`.
+    private var columns = StartPageView.columns
+    private lazy var closedWidth = closedList.widthAnchor.constraint(equalToConstant: Self.width)
     private static let limit = 8
     private static let closedLimit = 5
     /// The tiles' width, which the list under them matches.
@@ -90,11 +95,12 @@ final class StartPageView: NSView {
         content.alignment = .leading
         content.spacing = 14
         content.addArrangedSubview(Self.headingRow(heading))
+        headingInset = heading.superview?.constraints.first { $0.firstItem === heading && $0.firstAttribute == .leading }
         content.addArrangedSubview(grid)
         content.addArrangedSubview(Self.headingRow(closedHeading))
         content.addArrangedSubview(closedList)
         content.setCustomSpacing(30, after: grid)
-        closedList.widthAnchor.constraint(equalToConstant: Self.width).isActive = true
+        closedWidth.isActive = true
         contentWidth.isActive = true
 
         for view in [content, emptyHint] {
@@ -167,6 +173,14 @@ final class StartPageView: NSView {
     /// Leaves the closed tabs out when the page is too short for them under
     /// the tiles, and lifts the content only as far as the room above it allows.
     private func fitContent() {
+        // A narrow page takes fewer columns rather than cutting tiles off.
+        let room = Int((bounds.width - 2 * Theme.Padding.sheet + 4) / (SiteTile.width + 4))
+        let fitting = min(Self.columns, max(Self.minColumns, room))
+        if fitting != columns {
+            columns = fitting
+            arrangeTiles()
+            updateClosedVisibility()
+        }
         let gap = tilesHeight > 0 && closedHeight > 0 ? content.customSpacing(after: grid) : 0
         let fits = tilesHeight == 0 || tilesHeight + gap + closedHeight <= bounds.height - 2 * Theme.Padding.sheet
         if fits != closedFits {
@@ -182,9 +196,15 @@ final class StartPageView: NSView {
         let hidden = shownClosed.isEmpty || !closedFits
         closedHeading.superview?.isHidden = hidden
         closedList.isHidden = hidden
-        let columns = hidden ? max(Self.minColumns, min(Self.columns, shownSites.count)) : Self.columns
-        let width = Self.width(columns: columns)
+        let shown = hidden ? max(Self.minColumns, min(columns, shownSites.count)) : columns
+        let width = Self.width(columns: shown)
         if contentWidth.constant != width { contentWidth.constant = width }
+        if closedWidth.constant != Self.width(columns: columns) { closedWidth.constant = Self.width(columns: columns) }
+        // One tile on its own is narrower than the heading, so the two are
+        // centered on each other rather than left to an empty column.
+        let single = hidden && shownSites.count == 1
+        content.alignment = single ? .centerX : .leading
+        headingInset.constant = single ? 0 : SiteTile.wellInset
     }
 
     /// A section's height: its heading, the space under it, and `body`.
@@ -248,11 +268,6 @@ final class StartPageView: NSView {
             zip(tiles, sites).forEach { $0.show($1) }
             return
         }
-        // Removing a row leaves its views in the grid, where the old tiles
-        // would show through the new ones, so they are taken out too.
-        let old = grid.subviews
-        while grid.numberOfRows > 0 { grid.removeRow(at: 0) }
-        old.forEach { $0.removeFromSuperview() }
         tiles = sites.map { site in
             // The site's page as shown now, which an update in place may change.
             SiteTile(site: site) { [weak self] disposition in
@@ -260,20 +275,46 @@ final class StartPageView: NSView {
                 self.onOpen?(url, disposition)
             }
         }
-        for start in stride(from: 0, to: tiles.count, by: Self.columns) {
-            let row = Array(tiles[start..<min(start + Self.columns, tiles.count)])
-            grid.addRow(with: row + Array(repeating: NSGridCell.emptyContentView, count: Self.columns - row.count))
+        arrangeTiles()
+        // Tiles arrive a moment after the page, so they fade in rather than
+        // pop, one a beat after another. Tiles that replace others just show.
+        guard !hadTiles, window != nil, !Theme.reduceMotion else { return }
+        for (index, tile) in tiles.enumerated() { tile.fadeUp(delay: Double(index) * 0.03) }
+    }
+}
+
+extension StartPageView {
+    /// Brings the heading, the tiles and the closed tabs in a beat after
+    /// another as the page comes up over a tab, rather than all at once.
+    /// Nothing under Reduce Motion.
+    func playEntrance() {
+        guard window != nil, !Theme.reduceMotion else { return }
+        let beat = 0.025
+        heading.superview?.fadeUp(duration: Theme.Duration.slide)
+        for (index, tile) in tiles.enumerated() { tile.fadeUp(delay: Double(index + 1) * beat, duration: Theme.Duration.slide) }
+        let after = Double(tiles.count + 1) * beat
+        closedHeading.superview?.fadeUp(delay: after, duration: Theme.Duration.slide)
+        closedList.fadeUp(delay: after + beat, duration: Theme.Duration.slide)
+    }
+
+    /// Puts the tiles in rows of `columns`.
+    private func arrangeTiles() {
+        // Removing a row leaves its views in the grid, where the old tiles
+        // would show through the new ones, so they are taken out too.
+        let old = grid.subviews
+        while grid.numberOfRows > 0 { grid.removeRow(at: 0) }
+        while grid.numberOfColumns > 0 { grid.removeColumn(at: 0) }
+        old.forEach { $0.removeFromSuperview() }
+        for start in stride(from: 0, to: tiles.count, by: columns) {
+            let row = Array(tiles[start..<min(start + columns, tiles.count)])
+            grid.addRow(with: row + Array(repeating: NSGridCell.emptyContentView, count: columns - row.count))
         }
         // Every column keeps a tile's width, so a short row fills from the
         // left. Left to the grid, empty columns can take the room a tile
         // would and push the last tile to the far edge.
         for index in 0..<grid.numberOfColumns { grid.column(at: index).width = SiteTile.width }
-        tilesHeight = sites.isEmpty ? 0 : sectionHeight(heading, grid)
+        tilesHeight = tiles.isEmpty ? 0 : sectionHeight(heading, grid)
         needsLayout = true
-        // Tiles arrive a moment after the page, so they fade in rather than
-        // pop. Tiles that replace others just show.
-        guard !hadTiles, window != nil, !Theme.reduceMotion else { return }
-        grid.fadeUp()
     }
 }
 

@@ -68,9 +68,10 @@ final class FindBar: NSView, NSTextFieldDelegate {
         glass.contentView = row
         // As tall and as round as the address bar.
         glass.cornerRadius = Theme.Capsule.radius
-        // A faint wash of the window color, so the capsule still shows on a
-        // white page, where clear glass all but disappears.
-        glass.tintColor = Theme.background.dynamic(alpha: 0.5)
+        // A wash of the window color, as the camera bar has, so the capsule
+        // shows on a white page, where clear glass all but disappears, and
+        // the page's own text doesn't read through the field.
+        glass.tintColor = Theme.background.dynamic(alpha: 0.85)
         glass.translatesAutoresizingMaskIntoConstraints = false
         addSubview(glass)
         NSLayoutConstraint.activate([
@@ -81,9 +82,11 @@ final class FindBar: NSView, NSTextFieldDelegate {
             glass.heightAnchor.constraint(equalToConstant: Theme.Capsule.height),
             glass.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
         ])
-        // Narrows when the page is too narrow to hold it.
+        // Narrows when the page is too narrow to hold it. Below the split
+        // view's holding priorities, so it never widens the page and pushes
+        // the sidebar or the agent panel aside.
         let width = glass.widthAnchor.constraint(equalToConstant: 340)
-        width.priority = .defaultHigh
+        width.priority = .init(255)
         width.isActive = true
         showCount(nil)
     }

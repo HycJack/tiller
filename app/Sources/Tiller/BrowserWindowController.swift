@@ -445,6 +445,7 @@ final class BrowserWindowController: NSResponder, NSToolbarDelegate,
                 self.unload(self.unloadCandidates(unusedFor: self.profile.settings.tabUnloadDelay.interval))
             }
         }
+        unloadTimer?.tolerance = 10
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
         source.setEventHandler { [weak self, weak source] in
             MainActor.assumeIsolated {
@@ -584,6 +585,7 @@ final class BrowserWindowController: NSResponder, NSToolbarDelegate,
                 startPage.frame = tab.hostView.bounds
                 startPage.autoresizingMask = [.width, .height]
                 tab.hostView.addSubview(startPage, positioned: .above, relativeTo: nil)
+                startPage.playEntrance()
             }
             startPage.reload()
         } else if startPage.superview === tab.hostView, !startPageFading {
@@ -905,6 +907,7 @@ final class BrowserWindowController: NSResponder, NSToolbarDelegate,
         mediaBarShown = true
         mediaBar.alphaValue = 0
         withEasing(Theme.Duration.quick) { mediaBar.animator().alphaValue = 1 }
+        mediaBar.dropIn()
         NSAccessibility.post(element: mediaBar, notification: .announcementRequested, userInfo: [
             .announcement: mediaBar.accessibilityLabel() ?? "",
             .priority: NSAccessibilityPriorityLevel.high.rawValue,
@@ -1093,6 +1096,7 @@ final class BrowserWindowController: NSResponder, NSToolbarDelegate,
                 findBar.leadingAnchor.constraint(greaterThanOrEqualTo: contentView.leadingAnchor, constant: Theme.Padding.panel),
             ])
             withEasing(Theme.Duration.quick) { findBar.animator().alphaValue = 1 }
+            findBar.dropIn()
             if !findBar.text.isEmpty { find(findBar.text) }
         }
         window?.makeFirstResponder(findBar.field)

@@ -37,6 +37,23 @@ beta shows what `## Unreleased` holds at the time.
   the open tabs once per edit rather than on every key, and `/` in the
   message field reads your skill folders in the background after the
   first time.
+- The find bar and the camera and microphone bar drop into place as they
+  fade in, a closed tab fades out while the others close up, and each time
+  the start page comes up its tiles and closed tabs come in one after
+  another.
+- On a narrow page the start page takes fewer columns instead of cutting
+  its tiles and closed tabs off at the left, and a single site's tile sits
+  centered under its heading.
+- The find bar's field is less see-through, so the page's own text no
+  longer shows through it.
+- On a narrow page the find bar and the camera and microphone bar narrow
+  to fit, instead of widening the page and pushing the agent panel aside.
+  At the narrowest the camera bar's buttons take a smaller size.
+- In dark mode the address bar keeps a faint edge at rest, so it still
+  shows where to type when the tabs are along the top.
+- Timers that tick each second while an agent works, and the check for
+  tabs to unload, give the system leeway to batch their wakeups. Agent
+  events that arrive together lay out the chat once rather than once each.
 
 ## 0.4.1
 

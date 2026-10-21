@@ -103,4 +103,18 @@ struct MotionTests {
         let last = try #require(animation.values?.last as? NSValue)
         #expect(CATransform3DIsIdentity(last.caTransform3DValue))
     }
+
+    @Test(.enabled(if: !Theme.reduceMotion)) func droppingInEasesDownToRest() {
+        let window = makeWindow()
+        defer { window.close() }
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 20, height: 20))
+        window.contentView!.addSubview(view)
+
+        view.dropIn(distance: 6)
+        let animation = view.layer?.animation(forKey: "dropIn") as? CABasicAnimation
+        #expect(abs(animation?.fromValue as? CGFloat ?? 0) == 6)
+        #expect(animation?.toValue as? CGFloat == 0)
+        // The view itself stays where it rests.
+        #expect(view.frame.origin == .zero)
+    }
 }
