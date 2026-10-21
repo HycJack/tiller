@@ -63,10 +63,20 @@ enum Theme {
         static let outline: CGFloat = 0.45
     }
 
-    /// `text` at `alpha`, resolved whenever it is drawn.
-    static func fill(_ alpha: CGFloat) -> NSColor { text.dynamic(alpha: alpha) }
+    /// `text` at `alpha`, resolved whenever it is drawn. Made once for each
+    /// alpha, as hovers ask for the same few all the time.
+    @MainActor
+    static func fill(_ alpha: CGFloat) -> NSColor {
+        if let color = fills[alpha] { return color }
+        let color = text.dynamic(alpha: alpha)
+        fills[alpha] = color
+        return color
+    }
+
+    @MainActor private static var fills: [CGFloat: NSColor] = [:]
 
     /// The fill for a row or tile in the given state, or clear at rest.
+    @MainActor
     static func fill(hovered: Bool, pressed: Bool = false, selected: Bool = false) -> NSColor {
         if pressed { return fill(Fill.pressed) }
         if selected { return fill(Fill.selected) }
@@ -79,8 +89,17 @@ enum Theme {
     /// so it can resolve wherever AppKit asks for it.
     nonisolated static let accentColor = accentColor(alpha: 1)
 
-    /// The accent at `alpha`.
-    static func accent(_ alpha: CGFloat) -> NSColor { accentColor(alpha: alpha) }
+    /// The accent at `alpha`, made once for each alpha. It still follows a
+    /// change of accent, being resolved whenever it is drawn.
+    @MainActor
+    static func accent(_ alpha: CGFloat) -> NSColor {
+        if let color = accents[alpha] { return color }
+        let color = accentColor(alpha: alpha)
+        accents[alpha] = color
+        return color
+    }
+
+    @MainActor private static var accents: [CGFloat: NSColor] = [:]
 
     private nonisolated static func accentColor(alpha: CGFloat) -> NSColor {
         NSColor(name: nil) { appearance in
@@ -178,11 +197,27 @@ enum Theme {
         static let bar: CGFloat = 26
     }
 
-    /// An SF Symbol image at a shared size.
+    /// An SF Symbol image at a shared size. Made once for each name, size,
+    /// weight and label, as rows ask for the same few over and over; an
+    /// image is shared, so it isn't changed after.
+    @MainActor
     static func symbol(_ name: String, size: CGFloat, weight: NSFont.Weight = .medium, label: String? = nil) -> NSImage? {
-        NSImage(systemSymbolName: name, accessibilityDescription: label)?
+        let key = SymbolKey(name: name, size: size, weight: weight.rawValue, label: label)
+        if let image = symbolCache[key] { return image }
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: label)?
             .withSymbolConfiguration(.init(pointSize: size, weight: weight))
+        symbolCache[key] = image
+        return image
     }
+
+    private struct SymbolKey: Hashable {
+        let name: String
+        let size: CGFloat
+        let weight: CGFloat
+        let label: String?
+    }
+
+    @MainActor private static var symbolCache: [SymbolKey: NSImage?] = [:]
 
     /// An icon-only button with no bezel, as in bars and rows. `label` is
     /// both the tooltip and what VoiceOver reads.
@@ -205,6 +240,7 @@ enum Theme {
     }
 
     /// The one close glyph, for tabs, bars and chips.
+    @MainActor
     static func closeImage(size: CGFloat = 9, label: String) -> NSImage? {
         symbol("xmark", size: size, weight: .bold, label: label)
     }
@@ -279,6 +315,7 @@ enum Theme {
 
     /// The outline a filled selection gets under Increase Contrast, where a
     /// faint fill alone would not show.
+    @MainActor
     static func selectionOutline(selected: Bool) -> NSColor {
         increaseContrast && selected ? fill(Accent.outline) : .clear
     }
@@ -387,13 +424,136 @@ func withEasing(_ duration: TimeInterval = Theme.Duration.standard, _ changes: (
 /// view again meanwhile checks in `done` that it is still meant to go.
 @MainActor
 func fadeOut(_ view: NSView, _ duration: TimeInterval = Theme.Duration.standard, then done: @escaping @MainActor () -> Void) {
-    NSAnimationContext.runAnimationGroup { context in
-        context.duration = Theme.reduceMotion ? 0 : duration
-        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        view.animator().alphaValue = 0
-    } completionHandler: {
-        MainActor.assumeIsolated { done() }
+    view.fadeAlpha(to: 0, duration: duration, then: done)
+}
+
+extension NSView {
+    /// Shows or hides the view. Coming into view in a window it fades in to
+    /// `alpha` rather than popping; it hides at once, so a view taking
+    /// another's place never overlaps it, unless `fadesOut`. Already shown,
+    /// it eases to a new `alpha`. Before the view is in a window, or under
+    /// Reduce Motion, the change lands at once. Calling it again with the
+    /// same state does nothing, so it is cheap on an update path.
+    @MainActor
+    func setShown(_ shown: Bool, alpha: CGFloat = 1, fadesOut: Bool = false, duration: TimeInterval = Theme.Duration.quick) {
+        let animates = window != nil && !Theme.reduceMotion
+        // Where a fade under way has got to.
+        let current = layer?.presentation()?.opacity
+        guard shown else {
+            guard !isHidden else { return }
+            guard fadesOut, animates else { isHidden = true; return }
+            // Already fading out.
+            guard alphaValue != 0 else { return }
+            fadeAlpha(to: 0, from: current, duration: duration) { [weak self] in
+                // Shown again meanwhile, it eased back to its alpha.
+                guard let self, self.alphaValue == 0 else { return }
+                self.isHidden = true
+            }
+            return
+        }
+        guard animates else {
+            isHidden = false
+            alphaValue = alpha
+            return
+        }
+        let from: Float
+        if isHidden {
+            from = 0
+            isHidden = false
+        } else if alphaValue == alpha {
+            return
+        } else {
+            from = current ?? Float(alphaValue)
+        }
+        fadeAlpha(to: alpha, from: from, duration: duration)
     }
+
+    /// Sets `alphaValue` to `to` and eases the layer there from `from`, or
+    /// from wherever it shows now, with an animation of its own: AppKit's
+    /// animator doesn't fade a view without a layer of its own, such as one
+    /// in the toolbar or the sidebar. Before the view is in a window, or
+    /// under Reduce Motion, it lands at once. `done` runs once it is there.
+    @MainActor
+    func fadeAlpha(
+        to: CGFloat, from: Float? = nil, duration: TimeInterval = Theme.Duration.quick,
+        then done: (@MainActor () -> Void)? = nil
+    ) {
+        let start = from ?? layer?.presentation()?.opacity ?? Float(alphaValue)
+        guard window != nil, !Theme.reduceMotion else {
+            alphaValue = to
+            done?()
+            return
+        }
+        wantsLayer = true
+        alphaValue = to
+        guard let layer else { done?(); return }
+        CATransaction.begin()
+        if let done { CATransaction.setCompletionBlock { MainActor.assumeIsolated { done() } } }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = start
+        fade.toValue = Float(to)
+        fade.duration = duration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(fade, forKey: "fade")
+        CATransaction.commit()
+    }
+
+    /// Fades the view's layer up from `opacity` to full, after `delay`,
+    /// without touching `alphaValue`, so nothing that sets that meanwhile
+    /// cuts it short. Nothing under Reduce Motion.
+    @MainActor
+    func fadeUp(from opacity: Float = 0, delay: TimeInterval = 0, duration: TimeInterval = Theme.Duration.panel) {
+        guard !Theme.reduceMotion, window != nil else { return }
+        wantsLayer = true
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = opacity
+        fade.toValue = 1
+        fade.beginTime = CACurrentMediaTime() + delay
+        fade.duration = duration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        fade.fillMode = .backwards
+        layer?.add(fade, forKey: "fadeUp")
+    }
+
+    /// A small pop as the view's layer appears or changes to mark a moment,
+    /// such as a check after Copy: it scales up from `from` with a little
+    /// overshoot. Nothing under Reduce Motion.
+    @MainActor
+    func pop(from scale: CGFloat = 0.6, duration: TimeInterval = Theme.Duration.slide) {
+        guard !Theme.reduceMotion, window != nil, let layer else { return }
+        // Scale about the middle, without moving the view: AppKit puts the
+        // anchor at the corner and owns the layer's position.
+        let bounds = layer.bounds
+        let animation = CAKeyframeAnimation(keyPath: "transform")
+        let center = CATransform3DMakeTranslation(bounds.midX, bounds.midY, 0)
+        func scaled(_ s: CGFloat) -> NSValue {
+            var t = CATransform3DScale(center, s, s, 1)
+            t = CATransform3DTranslate(t, -bounds.midX, -bounds.midY, 0)
+            return NSValue(caTransform3D: t)
+        }
+        animation.values = [scaled(scale), scaled(1.08), scaled(1)]
+        animation.keyTimes = [0, 0.6, 1]
+        animation.timingFunctions = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .easeInEaseOut)]
+        animation.duration = duration
+        layer.add(animation, forKey: "pop")
+    }
+}
+
+extension NSView {
+    /// Adds an area that reports the mouse entering and leaving the view, if
+    /// it has none yet. With `.inVisibleRect` it follows the visible part on
+    /// its own, so it needn't be made again on every scroll step, and the
+    /// areas AppKit keeps, such as the tooltip's, are left alone. Call it
+    /// from `updateTrackingAreas`.
+    @MainActor
+    func addHoverArea(_ options: NSTrackingArea.Options) {
+        guard !trackingAreas.contains(where: { $0.userInfo?[Self.hoverAreaKey] != nil }) else { return }
+        addTrackingArea(NSTrackingArea(
+            rect: .zero, options: options.union([.mouseEnteredAndExited, .inVisibleRect]), owner: self,
+            userInfo: [Self.hoverAreaKey: true]))
+    }
+
+    private static let hoverAreaKey = "TillerHoverArea"
 }
 
 extension NSMenu {
@@ -532,9 +692,9 @@ extension NSColor {
     /// windows' while Settings forces light or dark: a hover or selection
     /// fill set from a mouse event would come out in the wrong shade.
     @MainActor var layerColor: CGColor {
-        var color = cgColor
+        var color: CGColor?
         NSApp.effectiveAppearance.performAsCurrentDrawingAppearance { color = self.cgColor }
-        return color
+        return color ?? cgColor
     }
 }
 

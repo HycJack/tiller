@@ -41,17 +41,20 @@ final class TranscriptView: NSView {
     private var openGroup: ToolGroupView?
 
     /// Tool calls that follow one another go into one group; any other row
-    /// ends the group. Whatever the agent was busy with has ended.
-    func add(_ row: NSView) {
+    /// ends the group. Whatever the agent was busy with has ended. A row
+    /// that comes live fades in; one from a chat being reopened, not
+    /// `animated`, lands at once with the rest.
+    func add(_ row: NSView, animated: Bool = true) {
         hideThinking()
         activity = nil
         if let call = row as? ToolRowView {
             if let openGroup {
                 openGroup.add(call)
+                if animated { call.fadeUp() }
                 needsLayout = true
             } else {
                 let group = ToolGroupView(first: call)
-                add(group)
+                add(group, animated: animated)
                 openGroup = group
             }
             return
@@ -61,6 +64,7 @@ final class TranscriptView: NSView {
         row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         if lastWidth > 0 { Self.fit(row, width: lastWidth) }
         needsLayout = true
+        if animated { row.fadeUp() }
     }
 
     /// Ends the current run of tool calls, folding them under their header.
@@ -86,7 +90,9 @@ final class TranscriptView: NSView {
         stack.addArrangedSubview(row)
         row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         needsLayout = true
+        row.fadeUp()
     }
+
 
     /// What the agent is busy with, which the Thinking row says in place of
     /// its phrases, with a line of detail under it; nil when unknown.
@@ -431,7 +437,8 @@ private final class ThumbnailRemoveButton: NSButton {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let hoverArea { removeTrackingArea(hoverArea) }
+        // `.inVisibleRect` follows scrolling on its own, so one area does.
+        guard hoverArea == nil else { return }
         let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
         addTrackingArea(area)
         hoverArea = area
@@ -562,8 +569,7 @@ final class ToolRowView: NSView, TranscriptRow {
         self.init(name: "thinking", detail: title, disclosure: more, finished: (false, ""))
         let name = seconds.map { "Thought for " + ThinkingRowView.duration(max(1, $0)) } ?? "Thought"
         heading = Self.heading(name: name, detail: title)
-        icon.image = NSImage(systemSymbolName: "brain", accessibilityDescription: "Reasoning")?
-            .withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
+        icon.image = Theme.symbol("brain", size: 12, weight: .regular, label: "Reasoning")
         icon.contentTintColor = Theme.tertiaryText
         if more {
             body = plain
@@ -717,8 +723,7 @@ final class ToolRowView: NSView, TranscriptRow {
             spinner.startAnimation(nil)
         } else {
             spinner.stopAnimation(nil)
-            icon.image = NSImage(systemSymbolName: "circle.dashed", accessibilityDescription: "Waiting")?
-                .withSymbolConfiguration(.init(pointSize: Theme.Symbol.row, weight: .medium))
+            icon.image = Theme.symbol("circle.dashed", size: Theme.Symbol.row, label: "Waiting")
             icon.contentTintColor = Theme.tertiaryText
             icon.isHidden = false
         }
@@ -729,7 +734,7 @@ final class ToolRowView: NSView, TranscriptRow {
         spinner.stopAnimation(nil)
         ticker?.invalidate()
         ticker = nil
-        icon.isHidden = false
+        icon.setShown(true) // fades in where the spinner was
         isHovered = false
         // Only a failure gets a color: a long run would otherwise be a
         // column of green. A run_task that ended short of its goal still
@@ -741,8 +746,7 @@ final class ToolRowView: NSView, TranscriptRow {
         case (false?, _): ("checkmark.circle.fill", "Done", Theme.tertiaryText)
         case (nil, _): ("minus.circle.fill", "Didn't finish", Theme.tertiaryText)
         }
-        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)?
-            .withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
+        icon.image = Theme.symbol(symbol, size: 12, label: description)
         icon.contentTintColor = color
         outcome = switch isError {
         case true?: .failed
@@ -855,9 +859,9 @@ final class ToolRowView: NSView, TranscriptRow {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let hoverArea { removeTrackingArea(hoverArea) }
-        hoverArea = nil
-        guard chevron != nil else { return }
+        // `.inVisibleRect` follows scrolling on its own, so one area does,
+        // made once there is something to show under the mouse.
+        guard hoverArea == nil, chevron != nil else { return }
         let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
         addTrackingArea(area)
         hoverArea = area
@@ -934,8 +938,7 @@ final class ToolRowView: NSView, TranscriptRow {
     }
 
     private static func chevronImage(expanded: Bool) -> NSImage? {
-        NSImage(systemSymbolName: expanded ? "chevron.down" : "chevron.right", accessibilityDescription: expanded ? "Hide steps" : "Show steps")?
-            .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
+        Theme.symbol(expanded ? "chevron.down" : "chevron.right", size: 10, weight: .semibold, label: expanded ? "Hide steps" : "Show steps")
     }
 
     /// The arguments worth showing: where it acts, and what it types or runs.
@@ -1137,7 +1140,10 @@ final class ThinkingRowView: NSView {
     let started = Date()
     /// Replaces the phrases while set, with an optional line under it.
     var activity: (text: String, detail: String?)? {
-        didSet { update() }
+        didSet {
+            guard activity?.text != oldValue?.text || activity?.detail != oldValue?.detail else { return }
+            update()
+        }
     }
 
     private let label: NSTextField
@@ -1257,6 +1263,7 @@ final class ThinkingRowView: NSView {
         setAccessibilityLabel(activity?.text ?? "Working")
         let detail = activity?.detail.flatMap { $0.isEmpty ? nil : $0 }
         detailLabel.stringValue = detail ?? ""
+        guard detailLabel.isHidden != (detail == nil) else { return }
         detailLabel.isHidden = detail == nil
         bottomToBoat.isActive = detail == nil
         bottomToDetail.isActive = detail != nil
@@ -2032,9 +2039,9 @@ final class MarkdownMessageView: NSView, TranscriptRow {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let hoverArea { removeTrackingArea(hoverArea) }
-        hoverArea = nil
-        guard actions != nil else { return }
+        // `.inVisibleRect` follows scrolling on its own, so one area does,
+        // made once there is something to show under the mouse.
+        guard hoverArea == nil, actions != nil else { return }
         let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
         addTrackingArea(area)
         hoverArea = area
@@ -2655,7 +2662,8 @@ final class MarkdownCodeView: NSView, TranscriptRow {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let hoverArea { removeTrackingArea(hoverArea) }
+        // `.inVisibleRect` follows scrolling on its own, so one area does.
+        guard hoverArea == nil else { return }
         let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
         addTrackingArea(area)
         hoverArea = area
@@ -2700,6 +2708,7 @@ private final class CopyButton: FocusReportingButton {
     init(name: String) {
         self.name = name
         super.init(frame: .zero)
+        wantsLayer = true // for the pop of the checkmark
         isBordered = false
         bezelStyle = .accessoryBarAction
         imagePosition = .imageOnly
@@ -2712,8 +2721,7 @@ private final class CopyButton: FocusReportingButton {
     required init?(coder: NSCoder) { fatalError() }
 
     private func showCopy() {
-        image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: name)?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
+        image = Theme.symbol("doc.on.doc", size: 11, label: name)
         contentTintColor = Theme.secondaryText
         toolTip = name
     }
@@ -2724,6 +2732,7 @@ private final class CopyButton: FocusReportingButton {
         image = Self.copiedImage
         contentTintColor = Theme.success
         toolTip = "Copied"
+        pop()
         NSAccessibility.post(element: self, notification: .announcementRequested, userInfo: [
             .announcement: "Copied",
             .priority: NSAccessibilityPriorityLevel.medium.rawValue,

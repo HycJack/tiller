@@ -226,9 +226,10 @@ final class TabStripView: NSView {
         // layout puts right; moving hundreds per scroll step adds up.
         let visible = isVertical ? bounds.insetBy(dx: 0, dy: -length) : bounds.insetBy(dx: -length, dy: 0)
         let culls = scrolledFrom != nil && !animated
+        // A new tab fades in where it lands while the others make room.
         for item in fadeIn {
             item.frame = slot(items.firstIndex(of: item) ?? 0, length: length)
-            item.alphaValue = 0
+            item.fadeUp(duration: Self.animationDuration)
         }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = animated ? Self.animationDuration : 0
@@ -496,36 +497,18 @@ final class TabItemView: NSView {
         // A compact tab only offers to close when it is the selected one, so a
         // pass of the mouse along a crowded row can't hit a close button.
         let showsClose = closesOnTrailing ? isHovered || isSelected : isHovered && (!isCompact || isSelected)
-        Self.show(closeButton, showsClose, alpha: 1)
+        closeButton.setShown(showsClose)
         titleToClose.isActive = closesOnTrailing && showsClose
         let coversIcon = showsClose && !closesOnTrailing
-        Self.show(icon, !(coversIcon || tab.isLoading), alpha: dimmed ? 0.5 : 1)
+        icon.setShown(!(coversIcon || tab.isLoading), alpha: dimmed ? 0.5 : 1)
         captureDot.layer?.backgroundColor = Theme.danger.layerColor
         // Over the icon, the spinner or the close button, whichever is there.
-        captureDot.isHidden = tab.capturing.isEmpty
+        captureDot.setShown(!tab.capturing.isEmpty)
         if tab.isLoading && !coversIcon {
             spinner.startAnimation(nil)
         } else {
             spinner.stopAnimation(nil)
         }
-    }
-
-    /// Shows or hides `view`. Coming into view under the mouse it fades in
-    /// to `alpha`, as the close button takes the icon's place, rather than
-    /// popping; it hides at once, so the two never overlap.
-    private static func show(_ view: NSView, _ shown: Bool, alpha: CGFloat) {
-        guard shown else {
-            view.isHidden = true
-            return
-        }
-        guard view.isHidden, view.window != nil, !Theme.reduceMotion else {
-            view.isHidden = false
-            view.alphaValue = alpha
-            return
-        }
-        view.alphaValue = 0
-        view.isHidden = false
-        withEasing(Theme.Duration.quick) { view.animator().alphaValue = alpha }
     }
 
     override func updateLayer() {

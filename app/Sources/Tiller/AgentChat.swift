@@ -110,6 +110,10 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     /// The reasoning under way: when it started and its text so far.
     private var reasoningStarted: Date?
     private var reasoningText = ""
+    private var reasoningLinePending = false
+    /// Whether the suggestions have come in yet, so switching back to an
+    /// empty chat doesn't play it again.
+    private var emptyStateAppeared = false
     private let quickLook = QuickLookItems()
     /// Brings the newest message back into view after scrolling up.
     private let scrollDownButton = ScrollDownButton()
@@ -413,6 +417,15 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         super.viewDidUnhide()
         if !recordsLoaded || pendingScrollToBottom { needsLayout = true }
         if liveTextStale { scheduleLiveTextRender() }
+        // A new chat's suggestions come in one after another the first
+        // time it shows, as a cleared one's do in `showIdle`.
+        if !emptyStateAppeared, !emptyState.isHidden {
+            emptyStateAppeared = true
+            emptyState.appear()
+        }
+        if recordsLoaded, !pendingScrollToBottom {
+            DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.updateScrollDownButtonAfterLayout() } }
+        }
     }
 
     /// The scroll view resets its own style on the same notification, so this
@@ -435,7 +448,7 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     private func updateScrollDownButton() {
         let clip = scrollView.contentView.bounds
         let away = transcript.frame.height - (clip.maxY - Self.insets.bottom)
-        scrollDownButton.setShown(away > max(80, clip.height * 0.5))
+        scrollDownButton.setShown(away > max(80, clip.height * 0.5), fadesOut: true, duration: Theme.Duration.standard)
     }
 
     @objc private func scrollDown(_ sender: Any?) {
@@ -572,7 +585,34 @@ final class AgentChatView: NSView, NSTextViewDelegate {
 
     /// What `/` can call in this chat.
     private var availableSkills: [AgentSkill] {
-        loadedSkills ?? AgentSkillCatalog.skills(for: kind, library: profile.skills)
+        if let loadedSkills { return loadedSkills }
+        return AgentSkillCatalog.skills(user: userSkills(), library: profile.skills)
+    }
+
+    /// The user's own skills for this chat's CLI as last read from their
+    /// folders, so typing `/` doesn't read them all again on the main
+    /// thread. Each ask reads them again in the background, so a skill
+    /// added meanwhile shows by the next one.
+    private var cachedUserSkills: (kind: AgentKind, skills: [AgentSkill])?
+    private var rereadingUserSkills = false
+
+    private func userSkills() -> [AgentSkill] {
+        let kind = self.kind
+        guard let cached = cachedUserSkills, cached.kind == kind else {
+            let skills = AgentSkillCatalog.userSkills(for: kind)
+            cachedUserSkills = (kind, skills)
+            return skills
+        }
+        if !rereadingUserSkills {
+            rereadingUserSkills = true
+            Task { [weak self] in
+                let skills = await Task.detached { AgentSkillCatalog.userSkills(for: kind) }.value
+                guard let self else { return }
+                self.rereadingUserSkills = false
+                if self.kind == kind { self.cachedUserSkills = (kind, skills) }
+            }
+        }
+        return cached.skills
     }
 
     /// The composer keeps its own undo, which a sent message clears.
@@ -1047,7 +1087,7 @@ final class AgentChatView: NSView, NSTextViewDelegate {
             transcript.activity = ("Thinking", nil)
         case .reasoningDelta(let delta):
             reasoningText += delta
-            transcript.activity = ("Thinking", Self.latestReasoningLine(reasoningText))
+            scheduleReasoningLine()
             return
         case .reasoning(let text):
             let started = reasoningStarted ?? transcript.waitStarted
@@ -1122,6 +1162,8 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     /// New output below the visible part grows the transcript without moving
     /// the clip, so the button is checked again once the rows are laid out.
     private func updateScrollDownButtonAfterLayout() {
+        // A chat out of sight lays out when it comes back, in `viewDidUnhide`.
+        guard window != nil, !isHiddenOrHasHiddenAncestor else { return }
         layoutSubtreeIfNeeded()
         updateScrollDownButton()
     }
@@ -1236,6 +1278,23 @@ final class AgentChatView: NSView, NSTextViewDelegate {
 
     /// The newest heading of a Codex summary, or the newest line of other
     /// reasoning, for the Thinking row while it streams.
+    /// Shows the reasoning's latest line under the Thinking row at most once
+    /// per `liveTextInterval`, rather than going through the whole text on
+    /// every few words that stream in.
+    private func scheduleReasoningLine() {
+        guard !reasoningLinePending else { return }
+        reasoningLinePending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.liveTextInterval) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.reasoningLinePending = false
+                // The reasoning ended meanwhile.
+                guard !self.reasoningText.isEmpty else { return }
+                self.transcript.activity = ("Thinking", Self.latestReasoningLine(self.reasoningText))
+            }
+        }
+    }
+
     private static func latestReasoningLine(_ text: String) -> String? {
         let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         if let heading = lines.last(where: { $0.hasPrefix("**") && $0.hasSuffix("**") && $0.count > 4 }) {
@@ -1288,8 +1347,13 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         composer.shortPlaceholder = "Ask \(profile.providers.displayName(choice))…"
         emptyState.show(choice, name: profile.providers.displayName(choice))
         let showEmpty = transcript.isEmpty && recordsLoaded
+        let appearing = showEmpty && emptyState.isHidden
         if showEmpty { emptyState.alphaValue = 1 }
         emptyState.isHidden = !showEmpty
+        if appearing {
+            emptyStateAppeared = true
+            emptyState.appear()
+        }
     }
 
     /// Fades the suggestions out as the first message goes in, rather than
@@ -1391,7 +1455,7 @@ final class AgentChatView: NSView, NSTextViewDelegate {
         case .error(let text):
             row = ErrorMessageView(text: text)
         }
-        transcript.add(row)
+        transcript.add(row, animated: false)
         return row
     }
 
@@ -1452,7 +1516,6 @@ final class EdgeFadeMask: CAGradientLayer {
 /// the newest message is out of view. It fades in and out, and its plate
 /// darkens under the mouse and while pressed.
 final class ScrollDownButton: NSButton {
-    private var shown = false
     private var isHovered = false {
         didSet { if isHovered != oldValue { needsDisplay = true } }
     }
@@ -1479,28 +1542,13 @@ final class ScrollDownButton: NSButton {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func setShown(_ show: Bool) {
-        guard show != shown else { return }
-        shown = show
-        if show { isHidden = false }
-        let reduceMotion = Theme.reduceMotion
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = reduceMotion ? 0 : Theme.Duration.standard
-            animator().alphaValue = show ? 1 : 0
-        } completionHandler: { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, !self.shown else { return }
-                self.isHidden = true
-            }
-        }
-    }
-
     /// Only this area is replaced, so the ones AppKit keeps for the tooltip stay.
     private var hoverArea: NSTrackingArea?
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let hoverArea { removeTrackingArea(hoverArea) }
+        // `.inVisibleRect` follows scrolling on its own, so one area does.
+        guard hoverArea == nil else { return }
         let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
         addTrackingArea(area)
         hoverArea = area

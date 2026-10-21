@@ -611,8 +611,7 @@ private final class ProfileSquareView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
+        addHoverArea([.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect])
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -745,8 +744,7 @@ private final class RailAddButton: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
+        addHoverArea([.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect])
     }
 
     override func mouseEntered(with event: NSEvent) {

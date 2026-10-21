@@ -605,7 +605,7 @@ private final class StatusPill: NSView {
 
     func show(_ text: String, busy: Bool) {
         label.stringValue = text
-        isHidden = text.isEmpty
+        setShown(!text.isEmpty, fadesOut: true, duration: Theme.Duration.standard)
         toolTip = text
         setAccessibilityLabel("Agent status: \(text)")
         guard busy != self.busy else { return }
@@ -684,7 +684,7 @@ final class AgentEmptyState: NSView {
             button.widthAnchor.constraint(equalToConstant: 200).isActive = true
         }
 
-        let stack = NSStackView(views: [badge, title, subtitle, buttons])
+        for view in [badge, title, subtitle, buttons] { stack.addArrangedSubview(view) }
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 8
@@ -701,6 +701,16 @@ final class AgentEmptyState: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    private let stack = NSStackView()
+
+    /// Brings the badge, the words and the suggestions in one after another,
+    /// a few hundredths of a second apart, as a new chat opens.
+    func appear() {
+        for (index, view) in stack.arrangedSubviews.enumerated() {
+            view.fadeUp(delay: Double(index) * 0.05)
+        }
+    }
 
     /// The subtitle wraps to the space there is, when the panel is narrower
     /// than its usual width. Set before the stack lays out, so it lays out once.
@@ -805,8 +815,7 @@ private final class SuggestionButton: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+        addHoverArea([.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect])
     }
 
     override func mouseEntered(with event: NSEvent) { isHovered = true }
@@ -864,7 +873,7 @@ final class Composer: NSView {
     var attachments: [AgentAttachment] = [] {
         didSet {
             thumbnails.images = attachments.map(\.image)
-            thumbnails.isHidden = attachments.isEmpty
+            thumbnails.setShown(!attachments.isEmpty, duration: Theme.Duration.standard)
             textBelowTop.isActive = attachments.isEmpty
             textBelowThumbnails.isActive = !attachments.isEmpty
             updateSendButton()
@@ -1471,8 +1480,7 @@ private final class QueuedMessageRow: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        for area in trackingAreas { removeTrackingArea(area) }
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+        addHoverArea([.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect])
     }
 
     override func mouseEntered(with event: NSEvent) { isHovered = true }
@@ -1606,7 +1614,11 @@ final class PlaceholderTextView: NSTextView {
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
-        if accepted { onFocusChange?() }
+        if accepted {
+            // The caret in the theme's accent, read again in case it changed.
+            insertionPointColor = Theme.accentColor
+            onFocusChange?()
+        }
         return accepted
     }
 

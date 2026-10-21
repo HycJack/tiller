@@ -15,6 +15,28 @@ beta shows what `## Unreleased` holds at the time.
 - A file path typed or pasted in the address bar, such as
   `/Users/me/page.html` or `~/page.html`, opens the file instead of
   searching for it.
+- Small things ease in instead of popping: the zoom and saved-password
+  badges in the address bar, a tab's recording dot, the agent's status and
+  busy dots, a finished tool call's check, new messages and the Thinking
+  row in a chat, pasted images in the message field, a chat's suggestions,
+  a new download, and a new tab in the sidebar. The page-load bar and the
+  agent button's dot, which were meant to fade, now do. Copy and a finished download's Show in Finder give a
+  small pop. The caret in the address bar and the message field takes the
+  theme's accent. Reduce Motion turns all of it off.
+- In dark mode the address bar's suggestions are no longer a light grey
+  over a dark page: the list takes the theme's own color, with the page
+  showing through a little.
+- The tab sidebar keeps the width it was given when Tiller opens and when
+  it is collapsed and expanded, rather than growing to its widest.
+  Collapsing or expanding it fades its rows into their new shape.
+- Less work while a chat streams and scrolls: the agent's reasoning
+  updates the Thinking row a few times a second rather than on every word,
+  a chat in the background no longer lays itself out, icons and hover
+  colors are made once and reused, and dragging the sidebar's edge saves
+  its width when the drag stops. Typing in the address bar looks through
+  the open tabs once per edit rather than on every key, and `/` in the
+  message field reads your skill folders in the background after the
+  first time.
 
 ## 0.4.1
 

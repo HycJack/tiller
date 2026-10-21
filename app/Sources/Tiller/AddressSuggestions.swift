@@ -160,6 +160,7 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
         highlighted = nil
         shownPages = []
         shownSearches = []
+        tabs = nil
         typed = ""
         completion = ""
         moved = false
@@ -341,6 +342,17 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
 
     // MARK: List
 
+    /// The other tabs with their titles and bare addresses lowercased, taken
+    /// once while the field is edited rather than up to three times a key.
+    private var tabs: [(tab: OpenTab, title: String, address: String)]?
+
+    private func tabSnapshot() -> [(tab: OpenTab, title: String, address: String)] {
+        if let tabs { return tabs }
+        let snapshot = (openTabs?() ?? []).map { ($0, $0.title.lowercased(), HistoryStore.bare($0.url).lowercased()) }
+        tabs = snapshot
+        return snapshot
+    }
+
     /// Builds the rows for `text` from the pages and searches found so far
     /// and completes the field from the first page when it can.
     private func show(for text: String) {
@@ -360,14 +372,12 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
         rows += shownSearches.filter { searches.insert($0.lowercased()).inserted }.prefix(Self.maxSearches).map(Suggestion.search)
         // Open tabs whose title or address has the text, and history pages
         // that are open, offer to switch to their tab.
-        let tabs = openTabs?() ?? []
+        let tabs = tabSnapshot()
         var tabsByAddress: [String: OpenTab] = [:]
-        for tab in tabs { tabsByAddress[HistoryStore.bare(tab.url).lowercased(), default: tab] = tab }
-        let matchingTabs = tabs.filter {
-            $0.title.lowercased().contains(lower) || HistoryStore.bare($0.url).lowercased().contains(lower)
-        }
-        for tab in matchingTabs.prefix(Self.maxTabs) where seen.insert(HistoryStore.bare(tab.url).lowercased()).inserted {
-            rows.append(.openTab(tab))
+        for entry in tabs { tabsByAddress[entry.address, default: entry.tab] = entry.tab }
+        let matchingTabs = tabs.filter { $0.title.contains(lower) || $0.address.contains(lower) }
+        for entry in matchingTabs.prefix(Self.maxTabs) where seen.insert(entry.address).inserted {
+            rows.append(.openTab(entry.tab))
         }
         for page in shownPages {
             let address = HistoryStore.bare(page.url).lowercased()
@@ -523,25 +533,46 @@ final class AddressSuggestions: NSObject, NSTextFieldDelegate {
 }
 
 /// The list's plate: a popover's material with a hairline around it, like
-/// the glass of the address bar it hangs from.
+/// the glass of the address bar it hangs from. A wash of the chrome's color
+/// over the material keeps it the theme's own, and keeps it from going
+/// light grey over a dark page, while the page still shows through a little.
 private final class SuggestionsBackground: NSVisualEffectView {
-    // A material view need not call updateLayer, so the border is set here
-    // and again when the appearance changes the separator's color.
+    private let wash = NSView()
+    private static let washAlpha: CGFloat = 0.6
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wash.wantsLayer = true
+        wash.autoresizingMask = [.width, .height]
+        wash.frame = bounds
+        addSubview(wash)
+        NotificationCenter.default.addObserver(self, selector: #selector(themeChanged(_:)), name: .themeDidChange, object: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func themeChanged(_ note: Notification) { updateColors() }
+
+    // A material view need not call updateLayer, so the colors are set here
+    // and again when the appearance changes them.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        updateBorder()
+        updateColors()
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        updateBorder()
+        updateColors()
     }
 
-    private func updateBorder() {
+    private func updateColors() {
         guard let layer else { return }
         layer.borderWidth = Theme.hairlineWidth
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer.borderColor = Theme.hairline.layerColor
+            layer.borderColor = Theme.hairline.cgColor
+            // Solid already when transparency is reduced.
+            wash.layer?.backgroundColor = Theme.reduceTransparency
+                ? nil : Theme.chrome.withAlphaComponent(Self.washAlpha).cgColor
         }
     }
 }

@@ -461,7 +461,12 @@ enum AgentSkillCatalog {
     /// What `/` offers before the CLI has said what it loaded: the library's
     /// enabled skills, then the user's own for that CLI, one per name.
     static func skills(for kind: AgentKind, library: AgentSkillStore) -> [AgentSkill] {
-        unique(library.enabledSkills + userSkills(for: kind))
+        skills(user: userSkills(for: kind), library: library)
+    }
+
+    /// The same, with the user's own skills already read.
+    static func skills(user: [AgentSkill], library: AgentSkillStore) -> [AgentSkill] {
+        unique(library.enabledSkills + user)
     }
 
     /// The skills the CLI said it loaded, described from their files where

@@ -290,16 +290,21 @@ final class DownloadsController: NSViewController {
     func reload() {
         let downloads = DownloadStore.shared.downloads
         var kept: [Download.Key: DownloadRowView] = [:]
+        // A download that starts while the list is open fades in.
+        let fades = view.window != nil && !Theme.reduceMotion
         for (index, download) in downloads.enumerated() {
-            let row = rowViews[download.key] ?? DownloadRowView(download: download)
+            let existing = rowViews[download.key]
+            let row = existing ?? DownloadRowView(download: download)
             row.update(download)
             if rows.arrangedSubviews.count <= index || rows.arrangedSubviews[index] !== row {
                 rows.insertArrangedSubview(row, at: min(index, rows.arrangedSubviews.count))
                 row.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
+                if existing == nil, fades { row.fadeUp() }
             }
             kept[download.key] = row
         }
-        for view in rows.arrangedSubviews where !(view is DownloadRowView && kept.values.contains { $0 === view }) {
+        let keptRows = Set(kept.values.map(ObjectIdentifier.init))
+        for view in rows.arrangedSubviews where !keptRows.contains(ObjectIdentifier(view)) {
             view.removeFromSuperview()
         }
         rowViews = kept
@@ -432,7 +437,7 @@ private final class DownloadRowView: NSView {
             if indeterminate && download.state == .inProgress { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
         }
         progress.doubleValue = download.fraction ?? 0
-        progress.isHidden = download.state != .inProgress
+        progress.setShown(download.state == .inProgress, fadesOut: true, duration: Theme.Duration.standard)
         if stateChanged {
             if download.state != .inProgress { progress.stopAnimation(nil) } else if indeterminate { progress.startAnimation(nil) }
             action.isHidden = false
@@ -441,6 +446,7 @@ private final class DownloadRowView: NSView {
                 setAction("xmark.circle.fill", "Cancel", #selector(cancel(_:)))
             case .complete:
                 setAction("magnifyingglass.circle.fill", "Show in Finder", #selector(reveal(_:)))
+                action.pop()
             case .canceled, .failed:
                 action.isHidden = true
             }

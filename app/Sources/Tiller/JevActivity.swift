@@ -162,14 +162,15 @@ final class JevOverlay {
         capsule.update(run)
         if appearing {
             capsule.isHidden = false
-            capsule.alphaValue = 0
-            withEasing(Theme.Duration.slide) { capsule.animator().alphaValue = 1 }
+            capsule.fadeAlpha(to: 1, from: 0, duration: Theme.Duration.slide)
         }
         if run.isRunning {
             if tick == nil {
                 let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
                     MainActor.assumeIsolated { self?.tock() }
                 }
+                // Leeway to fire with other timers, saving wakeups.
+                timer.tolerance = 0.02
                 RunLoop.main.add(timer, forMode: .common)
                 tick = timer
             }
@@ -409,7 +410,7 @@ final class JevActivityView: NSView {
         activity.stringValue = run.isRunning ? run.activity : Self.ending(run)
         activity.textColor = run.isRunning || run.status == "done" ? Theme.secondaryText : Theme.text
         activity.toolTip = run.goal.isEmpty ? nil : "Goal: " + run.goal
-        stopButton.isHidden = !run.isRunning
+        stopButton.setShown(run.isRunning, fadesOut: true)
         stopButton.isEnabled = !run.stopRequested
         updateClock(run)
         setAccessibilityValue(activity.stringValue)

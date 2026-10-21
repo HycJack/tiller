@@ -146,7 +146,7 @@ final class AddressBarView: NSView {
     func showZoom(_ factor: Double) {
         let percent = Int((factor * 100).rounded())
         if percent != 100 { zoomButton.title = "\(percent)%" }
-        zoomButton.isHidden = percent == 100
+        zoomButton.setShown(percent != 100)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -169,6 +169,7 @@ final class AddressBarView: NSView {
                 // A new load starts from the left edge.
                 progressFraction = 0
                 progressFill.frame = progressFrame(0)
+                progressFill.layer?.removeAnimation(forKey: "fade")
                 progressFill.alphaValue = 1
             }
             guard fraction > progressFraction else { return }
@@ -186,10 +187,7 @@ final class AddressBarView: NSView {
             } completionHandler: { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self, !self.showsLoad else { return }
-                    NSAnimationContext.runAnimationGroup { context in
-                        context.duration = Theme.Duration.panel
-                        self.progressFill.animator().alphaValue = 0
-                    }
+                    self.progressFill.fadeAlpha(to: 0, duration: Theme.Duration.panel)
                 }
             }
         }
@@ -346,6 +344,8 @@ final class AddressField: NSTextField {
             showURL()
             return false
         }
+        // The caret in the theme's accent, as the focus ring.
+        (currentEditor() as? NSTextView)?.insertionPointColor = Theme.accentColor
         currentEditor()?.selectAll(nil)
         onEditingChanged?(true)
         return true

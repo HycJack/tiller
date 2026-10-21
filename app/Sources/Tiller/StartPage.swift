@@ -273,12 +273,7 @@ final class StartPageView: NSView {
         // Tiles arrive a moment after the page, so they fade in rather than
         // pop. Tiles that replace others just show.
         guard !hadTiles, window != nil, !Theme.reduceMotion else { return }
-        grid.alphaValue = 0
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = Theme.Duration.panel
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            grid.animator().alphaValue = 1
-        }
+        grid.fadeUp()
     }
 }
 
@@ -302,8 +297,7 @@ private class ClickableView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+        addHoverArea([.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect])
     }
 
     override func mouseEntered(with event: NSEvent) { isHovered = true }
@@ -558,11 +552,12 @@ private final class GrainView: NSView {
 
     override func updateLayer() {
         let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        layer?.backgroundColor = NSColor(patternImage: dark ? Self.whiteTile : Self.blackTile).layerColor
+        layer?.backgroundColor = dark ? Self.whitePattern : Self.blackPattern
     }
 
-    private static let whiteTile = tile(white: true)
-    private static let blackTile = tile(white: false)
+    // A pattern looks the same in light and dark, so each is made once.
+    private static let whitePattern = NSColor(patternImage: tile(white: true)).cgColor
+    private static let blackPattern = NSColor(patternImage: tile(white: false)).cgColor
 
     /// The tile in 1x and 2x pixels for its 96 points, so a Retina screen
     /// gets grain at its own resolution rather than doubled.

@@ -32,6 +32,8 @@ final class BrowserWindowController: NSResponder, NSToolbarDelegate,
     private let sidebar = TabSidebarView()
     /// The sidebar's width while it isn't collapsed.
     private var sidebarWidth = TabSidebarView.defaultWidth
+    /// True while `fitSidebar` moves the divider.
+    private var fittingSidebar = false
     private lazy var sidebarMinWidth = sidebar.widthAnchor.constraint(greaterThanOrEqualToConstant: 0)
     private lazy var sidebarMaxWidth = sidebar.widthAnchor.constraint(lessThanOrEqualToConstant: 0)
     /// Holds every tab's view. The selected one is on top, and the others are
@@ -560,7 +562,7 @@ final class BrowserWindowController: NSResponder, NSToolbarDelegate,
         backButton.isEnabled = tab.canGoBack
         forwardButton.isEnabled = tab.canGoForward
         updateWindowTitle()
-        addressBar.keyButton.isHidden = savedLogins(for: tab).isEmpty
+        addressBar.keyButton.setShown(!savedLogins(for: tab).isEmpty)
         addressBar.showZoom(tab.zoomFactor)
         updateStartPage(for: tab)
     }
@@ -1205,7 +1207,7 @@ final class BrowserWindowController: NSResponder, NSToolbarDelegate,
     /// tooltip, which can't see the dot.
     private func updateAgentBadge() {
         let shown = agentPanel.isBusy && !agentPanelShown
-        withEasing(Theme.Duration.quick) { agentBadge.animator().alphaValue = shown ? 1 : 0 }
+        if agentBadge.alphaValue != (shown ? 1 : 0) { agentBadge.fadeAlpha(to: shown ? 1 : 0) }
         let label = shown ? "Agent (working)" : "Agent"
         agentButton.toolTip = label
         agentButton.setAccessibilityLabel(label)
@@ -1606,13 +1608,26 @@ final class BrowserWindowController: NSResponder, NSToolbarDelegate,
         let range = TabSidebarView.widthRange
         let width = collapsed
             ? TabSidebarView.collapsedWidth : min(max(sidebarWidth, range.lowerBound), range.upperBound)
+        // The widths it passes through on the way are not the user's choice.
+        fittingSidebar = true
+        defer { fittingSidebar = false }
         // Apart first, so the two never cross on the way.
         sidebarMinWidth.constant = 0
         sidebarMaxWidth.constant = collapsed ? width : range.upperBound
         sidebarMinWidth.constant = collapsed ? width : range.lowerBound
         guard !sidebar.isHidden else { return splitView.adjustSubviews() }
+        // Held at its width while the split view lays out: given only the
+        // range, it took the points the page gave up on the way and came
+        // back from collapsed wider than it went, up to the maximum.
+        sidebarMaxWidth.constant = width
+        sidebarMinWidth.constant = width
         splitView.layoutSubtreeIfNeeded()
         splitView.setPosition(width, ofDividerAt: 0)
+        splitView.layoutSubtreeIfNeeded()
+        guard !collapsed else { return }
+        // Free again for a drag of the divider.
+        sidebarMinWidth.constant = range.lowerBound
+        sidebarMaxWidth.constant = range.upperBound
     }
 
     /// Collapses the sidebar to icons or expands it, from its button or the
@@ -1622,13 +1637,22 @@ final class BrowserWindowController: NSResponder, NSToolbarDelegate,
         sidebar.isCollapsed.toggle()
         profile.settings.sidebarCollapsed = sidebar.isCollapsed
         fitSidebar()
+        // The width snaps, since easing it would resize the page on every
+        // frame; the sidebar's rows fade up into their new shape instead.
+        sidebar.fadeUp(from: 0.3)
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
-        guard !sidebar.isHidden, !sidebar.isCollapsed, sidebar.frame.width != sidebarWidth,
+        guard !fittingSidebar, !sidebar.isHidden, !sidebar.isCollapsed, sidebar.frame.width != sidebarWidth,
             TabSidebarView.widthRange.contains(sidebar.frame.width)
         else { return }
         sidebarWidth = sidebar.frame.width
+        // Saved once the drag pauses, not on every step of it.
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(saveSidebarWidth), object: nil)
+        perform(#selector(saveSidebarWidth), with: nil, afterDelay: 0.3)
+    }
+
+    @objc private func saveSidebarWidth() {
         profile.settings.defaults.set(Double(sidebarWidth), forKey: Self.sidebarWidthKey)
     }
 
@@ -2139,9 +2163,13 @@ extension BrowserWindowController {
             guard let conversation = history.conversation(id) else { throw ControlError("no chat with id \(id)") }
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
-            let records = history.records(for: id).compactMap { record -> Any? in
-                (try? encoder.encode(record)).flatMap { try? JSONSerialization.jsonObject(with: $0) }
-            }
+            let saved = history.records(for: id)
+            // All in one pass; one by one only if a record won't encode, to
+            // leave just that one out.
+            let records = (try? encoder.encode(saved)).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+                ?? saved.compactMap { record -> Any? in
+                    (try? encoder.encode(record)).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+                }
             var result = describe(conversation)
             result["records"] = records
             return result

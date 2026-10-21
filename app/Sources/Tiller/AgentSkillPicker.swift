@@ -217,8 +217,7 @@ private final class SkillPickerRow: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+        addHoverArea([.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect])
     }
 
     override func mouseEntered(with event: NSEvent) { onHover?() }

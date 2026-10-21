@@ -110,7 +110,7 @@ private final class TabNumberButton: NSView {
     }
     var isBusy = false {
         didSet {
-            busyDot.isHidden = !isBusy
+            busyDot.setShown(isBusy, fadesOut: true)
             updateLabel()
         }
     }
@@ -135,8 +135,8 @@ private final class TabNumberButton: NSView {
     private var offersClose: Bool { isSelected && isHovered && closeArmed && !isBusy }
 
     private func updateLabel() {
-        label.isHidden = offersClose
-        closeIcon.isHidden = !offersClose
+        label.setShown(!offersClose)
+        closeIcon.setShown(offersClose)
         toolTip = offersClose ? "Close Tab" : title
     }
 
@@ -202,8 +202,7 @@ private final class TabNumberButton: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+        addHoverArea([.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect])
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -482,8 +481,7 @@ private final class HistoryRowView: NSTableRowView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        addHoverArea([.mouseEnteredAndExited, .activeAlways, .inVisibleRect])
     }
 
     override func mouseEntered(with event: NSEvent) { isHovered = true }
