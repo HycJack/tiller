@@ -507,12 +507,17 @@ final class AddressField: NSTextField {
     }
 }
 
-/// Turns address bar input into a URL: a URL if it looks like one, else a
-/// search with the engine the profile's `settings` chose.
+/// Turns address bar input into a URL: a URL if it looks like one, a file
+/// URL for a path on this Mac, else a search with the engine the profile's
+/// `settings` chose.
 enum AddressInput {
     static func url(for input: String, settings: ProfileSettings) -> String {
         if input.contains("://") || input.hasPrefix("about:") || input.hasPrefix("data:") {
             return input
+        }
+        // A path may hold spaces, so it is a file whether or not it exists.
+        if input.hasPrefix("/") || input.hasPrefix("~/") {
+            return URL(fileURLWithPath: (input as NSString).expandingTildeInPath).absoluteString
         }
         let host = input.split(separator: "/", maxSplits: 1).first.map(String.init) ?? input
         // A colon only belongs to a host when a port follows it, so search

@@ -18,6 +18,17 @@ struct AddressBarTests {
         #expect((text as NSString).substring(with: site) == "example.com:8080")
     }
 
+    @Test func pathsOpenAsFiles() {
+        let settings = ProfileSettings(profileID: "address-input-tests")
+        let url = { AddressInput.url(for: $0, settings: settings) }
+        #expect(url("/private/tmp/page.html") == "file:///private/tmp/page.html")
+        #expect(url("~/page.html") == "file://\(NSHomeDirectory())/page.html")
+        #expect(url("/tmp/My Notes/a.html") == "file:///tmp/My%20Notes/a.html")
+        #expect(url("file:///tmp/a.html") == "file:///tmp/a.html")
+        #expect(url("site:example.com") == settings.searchURL(for: "site:example.com"))
+        #expect(url("example.com/a") == "https://example.com/a")
+    }
+
     private func page(_ url: String, visits: Int = 1, typed: Int = 0, daysAgo: Double = 0) -> HistoryPage {
         HistoryPage(
             url: url, title: "", visitCount: visits, lastVisit: Date().addingTimeInterval(-daysAgo * 86_400),

@@ -12,6 +12,9 @@ beta shows what `## Unreleased` holds at the time.
   closing a window or profile, or quitting Tiller, works as before.
 - Apps that list browsers, such as link pickers, now include Tiller, and
   a web page handed off from another device opens in Tiller.
+- A file path typed or pasted in the address bar, such as
+  `/Users/me/page.html` or `~/page.html`, opens the file instead of
+  searching for it.
 
 ## 0.4.1
 
