@@ -51,6 +51,14 @@ beta shows what `## Unreleased` holds at the time.
   At the narrowest the camera bar's buttons take a smaller size.
 - In dark mode the address bar keeps a faint edge at rest, so it still
   shows where to type when the tabs are along the top.
+- With only one or a few frequently visited sites, the start page's tiles
+  and their heading sit centered on the page again, rather than off to the
+  left with the heading out of line with the tile.
+- Switching to another chat in the agent panel, opening one from history
+  or closing a chat's tab fades the chat that takes the panel in rather
+  than cutting to it; the chat tabs and the message field stay still.
+- The tip beside a profile in the profile rail fades in and out instead of
+  popping, and moving from one profile to the next just changes it.
 - Timers that tick each second while an agent works, and the check for
   tabs to unload, give the system leeway to batch their wakeups. Agent
   events that arrive together lay out the chat once rather than once each.

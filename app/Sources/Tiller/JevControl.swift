@@ -374,7 +374,7 @@ final class JevSettingsPane: SettingsPane, NSTextFieldDelegate {
         let button = NSButton(title: link, target: target, action: #selector(openLink(_:)))
         button.isBordered = false
         button.attributedTitle = NSAttributedString(string: link + " \u{2197}", attributes: [
-            .font: NSFont.systemFont(ofSize: 11),
+            .font: NSFont.systemFont(ofSize: Theme.FontSize.caption),
             .foregroundColor: NSColor.linkColor,
         ])
         button.toolTip = url

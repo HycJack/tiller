@@ -800,6 +800,9 @@ private final class RailTip {
     private var timer: Timer?
     /// When the tip last went away, so the next square's comes at once.
     private var hiddenAt = Date.distantPast
+    /// Bumped on every show and hide, so a fade-out that a show overtook
+    /// leaves the tip up.
+    private var fadeGeneration = 0
 
     private init() {
         panel = NSPanel(
@@ -888,9 +891,21 @@ private final class RailTip {
         timer = nil
         anchor = nil
         guard panel.isVisible else { return }
-        panel.parent?.removeChildWindow(panel)
-        panel.orderOut(nil)
         hiddenAt = Date()
+        fadeGeneration += 1
+        let fade = fadeGeneration
+        // Fades out rather than vanishing, as it faded in.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Theme.reduceMotion ? 0 : Theme.Duration.quick
+            panel.animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.fadeGeneration == fade else { return }
+                self.panel.parent?.removeChildWindow(self.panel)
+                self.panel.orderOut(nil)
+                self.panel.alphaValue = 1
+            }
+        }
     }
 
     private func present(_ tip: Content) {
@@ -915,7 +930,17 @@ private final class RailTip {
             panel.parent?.removeChildWindow(panel)
             window.addChildWindow(panel, ordered: .above)
         }
+        fadeGeneration += 1
+        let appearing = !panel.isVisible
+        if appearing { panel.alphaValue = 0 }
         panel.orderFront(nil)
+        // Eases in when it first comes up, or back from a fade-out; moving
+        // from one square's tip to the next it just changes.
+        guard panel.alphaValue < 1 else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Theme.reduceMotion ? 0 : Theme.Duration.quick
+            panel.animator().alphaValue = 1
+        }
     }
 }
 

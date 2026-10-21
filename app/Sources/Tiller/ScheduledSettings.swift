@@ -431,7 +431,7 @@ final class ScheduleEditorController: NSViewController, NSTextViewDelegate, NSTe
         let textView = scroll.documentView as! NSTextView
         textView.drawsBackground = false
         textView.string = schedule?.prompt ?? ""
-        textView.font = .systemFont(ofSize: 13)
+        textView.font = .systemFont(ofSize: Theme.FontSize.body)
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false

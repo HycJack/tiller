@@ -12,6 +12,8 @@ final class StartPageView: NSView {
     private let heading = StartPageView.heading("Frequently Visited")
     /// The heading's inset from the tiles' column, which a lone tile drops.
     private var headingInset: NSLayoutConstraint!
+    /// Centers the heading over a lone tile in place of `headingInset`.
+    private lazy var headingCenter = heading.centerXAnchor.constraint(equalTo: heading.superview!.centerXAnchor)
     private let grid = NSGridView()
     private let closedHeading = StartPageView.heading("Recently Closed")
     private let closedList = NSStackView()
@@ -204,7 +206,8 @@ final class StartPageView: NSView {
         // centered on each other rather than left to an empty column.
         let single = hidden && shownSites.count == 1
         content.alignment = single ? .centerX : .leading
-        headingInset.constant = single ? 0 : SiteTile.wellInset
+        headingInset.isActive = !single
+        headingCenter.isActive = single
     }
 
     /// A section's height: its heading, the space under it, and `body`.
@@ -305,6 +308,10 @@ extension StartPageView {
         while grid.numberOfRows > 0 { grid.removeRow(at: 0) }
         while grid.numberOfColumns > 0 { grid.removeColumn(at: 0) }
         old.forEach { $0.removeFromSuperview() }
+        // No more columns than tiles: empty ones would make the grid wider
+        // than the column narrowed to fit a few tiles, and push it all off
+        // center.
+        let columns = min(columns, max(1, tiles.count))
         for start in stride(from: 0, to: tiles.count, by: columns) {
             let row = Array(tiles[start..<min(start + columns, tiles.count)])
             grid.addRow(with: row + Array(repeating: NSGridCell.emptyContentView, count: columns - row.count))

@@ -1503,6 +1503,17 @@ final class AgentChatView: NSView, NSTextViewDelegate {
     }
 }
 
+extension AgentChatView {
+    /// Fades the transcript, or the empty state, up as this chat takes the
+    /// panel from another, so the switch reads as one rather than a cut. The
+    /// tab bar and the message field stay put. Nothing under Reduce Motion.
+    func playSwitchIn() {
+        for view in [scrollView, emptyState] where !view.isHidden {
+            view.fadeUp(from: 0.2, duration: Theme.Duration.standard)
+        }
+    }
+}
+
 /// The transcript's mask: opaque, except for a short ramp to clear at the
 /// top and bottom edges. The ramps fall within the scroll view's insets and
 /// the transcript's own padding, so text at rest is never faded, only text

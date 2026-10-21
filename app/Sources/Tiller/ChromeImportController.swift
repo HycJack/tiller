@@ -231,7 +231,7 @@ final class ChromeImportController: NSWindowController {
 
     private func buildContent() {
         let heading = NSTextField(labelWithString: "Import from Google Chrome")
-        heading.font = .systemFont(ofSize: 13, weight: .semibold)
+        heading.font = .systemFont(ofSize: Theme.FontSize.body, weight: .semibold)
 
         let grid = NSGridView()
         grid.rowSpacing = 6
@@ -427,11 +427,11 @@ final class ChromeImportController: NSWindowController {
 
     private func show(_ results: [ImportResult]) {
         let text = NSMutableAttributedString()
-        let body: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.labelColor]
+        let body: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: Theme.FontSize.secondary), .foregroundColor: NSColor.labelColor]
         for (index, result) in results.enumerated() {
             if index > 0 { text.append(NSAttributedString(string: "\n", attributes: body)) }
             var bold = body
-            bold[.font] = NSFont.systemFont(ofSize: 12, weight: .semibold)
+            bold[.font] = NSFont.systemFont(ofSize: Theme.FontSize.secondary, weight: .semibold)
             text.append(NSAttributedString(string: result.title + ": ", attributes: bold))
             var detail = body
             if result.error != nil { detail[.foregroundColor] = NSColor.systemRed }

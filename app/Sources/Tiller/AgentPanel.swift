@@ -34,6 +34,10 @@ final class AgentPanelView: NSView {
     /// ends.
     private var scheduledChats: [AgentChatView] = []
     private var activeIndex = 0
+    /// The id of the chat the panel showed last, so the one taking its
+    /// place, by a switch of tab, a chat opened from history or a tab
+    /// closed, fades in. An id, as a replaced chat is gone by then.
+    private var shownChatID: String?
     private var active: AgentChatView { chats[activeIndex] }
     private var historyPopover: NSPopover?
 
@@ -180,6 +184,8 @@ final class AgentPanelView: NSView {
         activeIndex = index
         for (i, chat) in chats.enumerated() { chat.isHidden = i != index }
         let chat = active
+        if window != nil, shownChatID != nil, shownChatID != chat.id { chat.playSwitchIn() }
+        shownChatID = chat.id
         if tabBar.superview !== chat.tabBarHost {
             tabBar.removeFromSuperview()
             tabBar.translatesAutoresizingMaskIntoConstraints = false

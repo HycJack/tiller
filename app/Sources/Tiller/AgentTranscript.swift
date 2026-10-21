@@ -214,7 +214,7 @@ final class UserMessageView: NSView, TranscriptRow {
     init(text: String, images: [NSImage] = [], onOpenImage: ((Int) -> Void)? = nil) {
         label = NSTextField(wrappingLabelWithString: text)
         super.init(frame: .zero)
-        label.font = .systemFont(ofSize: 13)
+        label.font = .systemFont(ofSize: Theme.FontSize.body)
         label.textColor = Theme.text
         label.isSelectable = true
         bubble.wantsLayer = true
@@ -686,7 +686,7 @@ final class ToolRowView: NSView, TranscriptRow {
         let open = isExpanded && body != nil
         if open, let body {
             text.append(NSAttributedString(string: "\n" + body, attributes: [
-                .font: NSFont.systemFont(ofSize: 11),
+                .font: NSFont.systemFont(ofSize: Theme.FontSize.caption),
                 .foregroundColor: Theme.secondaryText,
             ]))
         }
@@ -702,7 +702,7 @@ final class ToolRowView: NSView, TranscriptRow {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
         return NSAttributedString(string: "\n" + text, attributes: [
-            .font: code ? NSFont.monospacedSystemFont(ofSize: 11, weight: .regular) : NSFont.systemFont(ofSize: 11),
+            .font: code ? NSFont.monospacedSystemFont(ofSize: Theme.FontSize.caption, weight: .regular) : NSFont.systemFont(ofSize: Theme.FontSize.caption),
             .foregroundColor: color,
             .paragraphStyle: paragraph,
         ])
@@ -760,7 +760,7 @@ final class ToolRowView: NSView, TranscriptRow {
         if isError == true, !summary.isEmpty {
             let text = NSMutableAttributedString(attributedString: heading)
             text.append(NSAttributedString(string: "\n" + summary, attributes: [
-                .font: NSFont.systemFont(ofSize: 11),
+                .font: NSFont.systemFont(ofSize: Theme.FontSize.caption),
                 .foregroundColor: Theme.danger,
             ]))
             label.attributedStringValue = text
@@ -928,7 +928,7 @@ final class ToolRowView: NSView, TranscriptRow {
 
     private static func heading(name: String, detail: String, separator: String = "  ") -> NSAttributedString {
         let text = NSMutableAttributedString(string: name, attributes: [
-            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+            .font: NSFont.systemFont(ofSize: Theme.FontSize.secondary, weight: .medium),
             .foregroundColor: Theme.text,
         ])
         if !detail.isEmpty {
@@ -1163,11 +1163,11 @@ final class ThinkingRowView: NSView {
         label = NSTextField(labelWithString: Self.phrases[phrase])
         super.init(frame: .zero)
         let boat = BoatView()
-        label.font = .systemFont(ofSize: 12)
+        label.font = .systemFont(ofSize: Theme.FontSize.secondary)
         label.textColor = Theme.secondaryText
         elapsedLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         elapsedLabel.textColor = Theme.tertiaryText
-        detailLabel.font = .systemFont(ofSize: 11)
+        detailLabel.font = .systemFont(ofSize: Theme.FontSize.caption)
         detailLabel.textColor = Theme.tertiaryText
         detailLabel.isHidden = true
         for field in [label, detailLabel] {
@@ -1278,7 +1278,7 @@ final class ThinkingRowView: NSView {
         let text = Self.phrases[phrase]
         guard !Theme.reduceMotion else { label.stringValue = text; return }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.15
+            context.duration = Theme.Duration.standard
             label.animator().alphaValue = 0
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
@@ -1286,7 +1286,7 @@ final class ThinkingRowView: NSView {
                 guard let self, self.activity == nil else { return }
                 self.label.stringValue = text
                 NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.15
+                    context.duration = Theme.Duration.standard
                     self.label.animator().alphaValue = 1
                 }
             }
@@ -1446,7 +1446,7 @@ final class ErrorMessageView: NSView, TranscriptRow {
         self.action = action?.run
         super.init(frame: .zero)
         wantsLayer = true
-        label.font = .systemFont(ofSize: 13)
+        label.font = .systemFont(ofSize: Theme.FontSize.body)
         label.textColor = Theme.text
         label.isSelectable = true
         let icon = NSImageView(image: NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Error")!

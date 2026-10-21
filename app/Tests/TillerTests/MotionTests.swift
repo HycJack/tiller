@@ -92,6 +92,24 @@ struct MotionTests {
         #expect(Set(starts).count == starts.count)
     }
 
+    @Test(.enabled(if: !Theme.reduceMotion)) func fadingUpLeavesTheAlphaAlone() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 20, height: 20))
+        window.contentView!.addSubview(view)
+
+        // As a chat's transcript does when it takes the agent panel.
+        view.fadeUp(from: 0.2, duration: Theme.Duration.standard)
+        let animation = try #require(view.layer?.animation(forKey: "fadeUp") as? CABasicAnimation)
+        #expect(animation.fromValue as? Float == 0.2)
+        #expect(animation.toValue as? Float == 1)
+        // Faint from the start, even before the animation's first frame.
+        #expect(animation.fillMode == .backwards)
+        // Whatever reads the view meanwhile sees it shown in full.
+        #expect(view.alphaValue == 1)
+        #expect(!view.isHidden)
+    }
+
     @Test(.enabled(if: !Theme.reduceMotion)) func popScalesAboutTheMiddle() throws {
         let window = makeWindow()
         defer { window.close() }

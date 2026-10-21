@@ -314,7 +314,7 @@ class SettingsPane: NSViewController {
 
     static func note(_ text: String = "") -> NSTextField {
         let label = NSTextField(labelWithString: text)
-        label.font = .systemFont(ofSize: 11)
+        label.font = .systemFont(ofSize: Theme.FontSize.caption)
         label.textColor = .secondaryLabelColor
         label.lineBreakMode = .byTruncatingTail
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -1578,7 +1578,7 @@ final class AgentSettingsPane: SettingsPane, NSTextFieldDelegate, NSTextViewDele
         let textView = scroll.documentView as! NSTextView
         textView.drawsBackground = false
         textView.string = settings.agentInstructions
-        textView.font = .systemFont(ofSize: 13)
+        textView.font = .systemFont(ofSize: Theme.FontSize.body)
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
